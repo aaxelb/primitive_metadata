@@ -1,8 +1,3 @@
-'''
-1. find (or create) gatherers who share your interests
-2. suggest a focus for s
-3. gather what yall know in a basket
-'''
 from .basket import Basket
 from .focus import Focus
 from .gatherer import gatherer_decorator
@@ -25,6 +20,7 @@ if __debug__:
     # modules with tests:
     from . import focus, gatherer, basket
 
+    # implement "load_tests protocol" for unittest
     def load_tests(loader, tests, pattern):
         suite = unittest.TestSuite()
         for module in (focus, gatherer, basket):

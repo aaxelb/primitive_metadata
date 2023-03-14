@@ -124,22 +124,6 @@ if __debug__:
     BLARG = rdflib.Namespace('https://blarg.example/blarg/')
 
     class BasicBasketTest(unittest.TestCase):
-        def setUp(self):
-            self.focus = Focus(BLARG.item, BLARG.Type)
-            self.mock_gatherers = {
-                BLARG.zork: unittest.mock.Mock(return_value=(
-                    (BLARG.item, BLARG.zork, BLARG.zorked),
-                )),
-                BLARG.bork: unittest.mock.Mock(return_value=(
-                    (BLARG.item, BLARG.bork, BLARG.borked),
-                    (BLARG.borked, BLARG.lork, BLARG.borklorked),
-                )),
-                BLARG.hork: unittest.mock.Mock(return_value=(
-                    (BLARG.item, BLARG.hork, BLARG.horked),
-                )),
-            }
-            for predicate, mock_gatherer in self.mock_gatherers.items():
-                gatherer_decorator(predicate)(mock_gatherer)
 
         def test_badbasket(self):
             # test non-focus AssertionError
@@ -149,16 +133,29 @@ if __debug__:
                 Basket('http://hello.example/')
 
         def test_goodbasket(self):
-            basket = Basket(self.focus)
-            self.assertEqual(basket.focus, self.focus)
+            focus = Focus(BLARG.item, BLARG.Type)
+            # define some mock gatherer functions
+            mock_zork = unittest.mock.Mock(return_value=(
+                (BLARG.item, BLARG.zork, BLARG.zorked),
+            ))
+            mock_bork = unittest.mock.Mock(return_value=(
+                (BLARG.item, BLARG.bork, BLARG.borked),
+                (BLARG.borked, BLARG.lork, BLARG.borklorked),
+            ))
+            mock_hork = unittest.mock.Mock(return_value=(
+                (BLARG.item, BLARG.hork, BLARG.horked),
+            ))
+            # register the mock gatherer functions
+            gatherer_decorator(BLARG.zork)(mock_zork)
+            gatherer_decorator(BLARG.bork)(mock_bork)
+            gatherer_decorator(BLARG.hork)(mock_hork)
+            # check basket organizes gatherers as expected
+            basket = Basket(focus)
+            self.assertEqual(basket.focus, focus)
             self.assertTrue(isinstance(basket.gathered_metadata, rdflib.Graph))
             self.assertEqual(len(basket), 0)
             self.assertEqual(len(basket._gathertasks_done), 0)
-
             # no repeat gathertasks:
-            mock_zork = self.mock_gatherers[BLARG.zork]
-            mock_bork = self.mock_gatherers[BLARG.bork]
-            mock_hork = self.mock_gatherers[BLARG.hork]
             mock_zork.assert_not_called()
             mock_bork.assert_not_called()
             mock_hork.assert_not_called()
@@ -167,7 +164,6 @@ if __debug__:
             mock_bork.assert_not_called()
             mock_hork.assert_not_called()
             self.assertEqual(len(basket), 2)
-            import pdb; pdb.set_trace()
             self.assertEqual(len(basket._gathertasks_done), 1)
             basket.pls_gather({BLARG.zork, BLARG.bork})
             mock_zork.assert_called_once()
@@ -187,7 +183,6 @@ if __debug__:
             mock_hork.assert_called_once()
             self.assertEqual(len(basket), 5)
             self.assertEqual(len(basket._gathertasks_done), 3)
-
             # __getitem__:
             self.assertEqual(set(basket[BLARG.zork]), {BLARG.zorked})
             self.assertEqual(set(basket[BLARG.bork]), {BLARG.borked})
@@ -209,7 +204,6 @@ if __debug__:
                 set(basket[BLARG.borked:BLARG.lork]),
                 {BLARG.borklorked},
             )
-
             # reset:
             basket.reset()
             self.assertEqual(len(basket), 0)
