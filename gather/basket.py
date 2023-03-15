@@ -72,12 +72,16 @@ class Basket:
         '''
         if isinstance(slice_or_arg, slice):
             focus_iri = slice_or_arg.start
-            predicate = slice_or_arg.stop
+            predicate_iri = slice_or_arg.stop
             # TODO: use slice_or_arg.step, maybe to constrain "expected type"?
         else:
             focus_iri = self.focus.iri
-            predicate = slice_or_arg
-        yield from self.gathered_metadata.objects(focus_iri, predicate)
+            predicate_iri = slice_or_arg
+        yield from self.gathered_metadata.objects(
+            subject=focus_iri,
+            predicate=predicate_iri,
+            unique=True,
+        )
 
     def __len__(self):
         # number of gathered triples

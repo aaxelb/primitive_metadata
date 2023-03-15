@@ -18,11 +18,16 @@ if __debug__:
     import unittest
 
     # modules with tests:
-    from . import focus, gatherer, basket
+    from . import (
+        focus,
+        gatherer,
+        basket,
+        render,
+    )
 
     # implement "load_tests protocol" for unittest
     def load_tests(loader, tests, pattern):
         suite = unittest.TestSuite()
-        for module in (focus, gatherer, basket):
+        for module in (focus, gatherer, basket, render):
             suite.addTests(loader.loadTestsFromModule(module))
         return suite

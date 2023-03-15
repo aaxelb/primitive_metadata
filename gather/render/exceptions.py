@@ -1,0 +1,2 @@
+class BasketRenderError(Exception):
+    pass
