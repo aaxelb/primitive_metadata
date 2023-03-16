@@ -62,7 +62,7 @@ class Basket:
         yield from self.gathered_metadata.predicates(focus_iri, unique=True)
 
     def __getitem__(self, slice_or_arg) -> typing.Iterable[rdflib.term.Node]:
-        '''convenience wrapper for rdflib.Graph.objects()
+        '''convenience wrapper for rdflib.Graph.objects(unique=True)
 
         basket[subject:predicate] -> objects that complete the rdf triple
         basket[predicate] -> same, with self.focus as implicit subject

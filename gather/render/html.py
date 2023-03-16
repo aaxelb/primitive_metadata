@@ -5,9 +5,9 @@ import xml.etree
 import rdflib
 
 from gather.basket import Basket
+from gather.basket_crawler import BasketCrawler
+from gather.exceptions import BasketRenderError
 from gather.focus import Focus
-from .exceptions import BasketRenderError
-from ._util import BasketCrawler
 
 
 def render_html(basket: Basket) -> str:
@@ -17,7 +17,7 @@ def render_html(basket: Basket) -> str:
 class HtmlBasketCrawler(BasketCrawler):
     # override from BasketCrawler
     @contextlib.contextmanager
-    def crawl_context(self):
+    def _crawl_context(self):
         self.itemid_to_elementid = {}
         self.tree_builder = xml.etree.ElementTree.TreeBuilder()
         self.tree_builder.start('article', {})
@@ -25,7 +25,7 @@ class HtmlBasketCrawler(BasketCrawler):
         self.tree_builder.end('article')
 
     # abstract method from BasketCrawler
-    def crawl_result(self):
+    def _crawl_result(self):
         return xml.etree.ElementTree.tostring(
             self.tree_builder.close(),
             encoding='unicode',
@@ -34,7 +34,7 @@ class HtmlBasketCrawler(BasketCrawler):
 
     # override from BasketCrawler
     @contextlib.contextmanager
-    def item_context(self, itemid):
+    def _item_context(self, itemid):
         dl_attrs = {
             'itemscope': '',
             'itemtype': ' '.join(set(self.basket[itemid:rdflib.RDF.type]))
@@ -51,31 +51,33 @@ class HtmlBasketCrawler(BasketCrawler):
 
     # override from BasketCrawler
     @contextlib.contextmanager
-    def itemproperty_context(self, itemid, property_iri):
-        self._leaf_element('dt', text=self.display_iri(property_iri))
+    def _itemproperty_context(self, itemid, property_iri):
+        self._leaf_element('dt', text=self._display_iri(property_iri))
         yield
 
     # override from BasketCrawler
-    def itempropertyvalue_context(self, itemid, property_iri, value_obj):
+    def _itempropertyvalue_context(self, itemid, property_iri, value_obj):
         return self._parent_element('dd', {'itemprop': property_iri})
 
     # abstract method from BasketCrawler
-    def visit_literal_value(self, itemid, property_iri, literal_value):
+    def _visit_literal_value(self, itemid, property_iri, literal_value):
         # TODO: datatype, language tags, dates
         self.tree_builder.data(literal_value)
 
     # abstract method from BasketCrawler
-    def visit_blank_node(self, itemid, property_iri, blank_node):
-        self.visit_item(blank_node)  # item without iri rendered in place
+    def _visit_blank_node(self, itemid, property_iri, blank_node):
+        # item without iri rendered in place;
+        # duplicated if referenced multiple times
+        self._visit_item(blank_node)
 
     # abstract method from BasketCrawler
-    def visit_iri_reference(self, itemid, property_iri, iri):
+    def _visit_iri_reference(self, itemid, property_iri, iri):
         self._leaf_element(
             'a',
             {'href': f'#{self._item_elementid(iri)}'},
-            text=self.display_iri(iri),
+            text=self._display_iri(iri),
         )
-        self.add_item_to_visit(iri)
+        self._add_item_to_visit(iri)
 
     def _item_elementid(self, itemid):
         try:
@@ -129,4 +131,5 @@ if __debug__:
 
         def test_html(self):
             actual_html = render_html(self.basket)
+            # TODO: indentation?
             self.assertEqual(actual_html, '<article><dl itemscope="" itemtype="https://blarg.example/blarg/Item" id="itemdescription-ea0e00f8ac6e27e457fbae19b0f351700355089608d1a1874d64df22807ef3b8" itemid="https://foo.example/one"><dt>rdf:type</dt><dd itemprop="http://www.w3.org/1999/02/22-rdf-syntax-ns#type"><a href="#itemdescription-7192147f234839d7b03749f54873e03093fea735e29b6e088138b928dd72be94">blarg:Item</a></dd><dt>blarg:complexProperty</dt><dd itemprop="https://blarg.example/blarg/complexProperty"><dl itemscope="" itemtype="https://blarg.example/blarg/InnerObject"><dt>rdf:type</dt><dd itemprop="http://www.w3.org/1999/02/22-rdf-syntax-ns#type"><a href="#itemdescription-0ede218fe60a5ea885351f2c74c86a42ced720b453b93f2931a20326ba2c0cc3">blarg:InnerObject</a></dd><dt>blarg:innerA</dt><dd itemprop="https://blarg.example/blarg/innerA">a</dd><dt>blarg:innerB</dt><dd itemprop="https://blarg.example/blarg/innerB">b</dd><dt>blarg:innerC</dt><dd itemprop="https://blarg.example/blarg/innerC">c</dd></dl></dd><dt>blarg:itemTitle</dt><dd itemprop="https://blarg.example/blarg/itemTitle">one thing</dd><dt>blarg:likes</dt><dd itemprop="https://blarg.example/blarg/likes"><a href="#itemdescription-b8c7a8fde8ab953a5cf5032dae5b445aad60797e2ee463097fc800e9da3abdf3">&lt;https://foo.example/two&gt;</a></dd></dl><dl itemscope="" itemtype="" id="itemdescription-7192147f234839d7b03749f54873e03093fea735e29b6e088138b928dd72be94" itemid="https://blarg.example/blarg/Item"></dl><dl itemscope="" itemtype="" id="itemdescription-0ede218fe60a5ea885351f2c74c86a42ced720b453b93f2931a20326ba2c0cc3" itemid="https://blarg.example/blarg/InnerObject"></dl><dl itemscope="" itemtype="https://blarg.example/blarg/Item" id="itemdescription-b8c7a8fde8ab953a5cf5032dae5b445aad60797e2ee463097fc800e9da3abdf3" itemid="https://foo.example/two"><dt>rdf:type</dt><dd itemprop="http://www.w3.org/1999/02/22-rdf-syntax-ns#type"><a href="#itemdescription-7192147f234839d7b03749f54873e03093fea735e29b6e088138b928dd72be94">blarg:Item</a></dd><dt>blarg:itemTitle</dt><dd itemprop="https://blarg.example/blarg/itemTitle">two thing</dd></dl></article>')
