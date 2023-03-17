@@ -21,9 +21,11 @@ __all__ = ('er', 'Focus', 'Basket',)
 if __debug__:
     import unittest
 
+    MODULES_WITH_TESTS = (focus, gatherer, basket, render)
+
     # implement "load_tests protocol" for unittest
     def load_tests(loader, tests, pattern):
         suite = unittest.TestSuite()
-        for module in (focus, gatherer, basket, render):
+        for module in MODULES_WITH_TESTS:
             suite.addTests(loader.loadTestsFromModule(module))
         return suite

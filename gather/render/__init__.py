@@ -1,11 +1,11 @@
-from . import turtle, jsonld, html
+from . import turtle, jsonld, html, jsonapi
 
 
 BASKET_RENDERER_BY_MEDIATYPE = {
     'text/turtle': turtle.render_turtle,
     'text/html': html.render_html,
     'application/ld+json': jsonld.render_jsonld,
-    # 'application/api+json': render_jsonapi,
+    'application/api+json': jsonapi.render_jsonapi,
 }
 
 
@@ -19,9 +19,11 @@ def get_basket_renderer(mediatype):
 if __debug__:
     import unittest
 
+    MODULES_WITH_TESTS = (turtle, jsonld, html, jsonapi,)
+
     # implement "load_tests protocol" for unittest
     def load_tests(loader, tests, pattern):
         suite = unittest.TestSuite()
-        for module in (turtle, jsonld, html):
+        for module in MODULES_WITH_TESTS:
             suite.addTests(loader.loadTestsFromModule(module))
         return suite

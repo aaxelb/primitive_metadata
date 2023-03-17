@@ -46,21 +46,26 @@ class JsonldBasketCrawler(BasketCrawler):
         last_property_iri = self._current_property_iri
         self._current_values = values
         self._current_property_iri = property_iri
-        yield
+        try:
+            yield
+        finally:
+            self._current_values = last_values
+            self._current_property_iri = last_property_iri
+        if property_iri == rdflib.RDF.type:
+            values = [
+                v['@id']
+                for v in values
+            ]
         self._current_item[self._display_iri(property_iri)] = values
-        self._current_values = last_values
-        self._current_property_iri = last_property_iri
 
     # abstract method from BasketCrawler
     def _visit_literal_value(self, itemid, property_iri, literal_value):
-        print(f'literal.datatype: {literal_value.datatype}')
-        if literal_value.datatype == rdflib.RDF.langString:
-            self._current_values.append({
-                '@value': str(literal_value),
-                '@language': literal_value.language,
-            })
-        else:
-            self._current_values.append(literal_value.toPython())
+        value_object = {'@value': literal_value.toPython()}
+        if literal_value.language is not None:
+            value_object['@language'] = literal_value.language
+        elif literal_value.datatype is not None:
+            value_object['@type'] = self._display_iri(literal_value.datatype)
+        self._current_values.append(value_object)
 
     # abstract method from BasketCrawler
     def _visit_blank_node(self, itemid, property_iri, blank_node):
@@ -112,6 +117,7 @@ if __debug__:
                 (one_iri, BLARG.complexProperty, one_bnode),
                 (one_bnode, rdflib.RDF.type, BLARG.InnerObject),
                 (one_bnode, BLARG.innerA, rdflib.Literal('a', lang='en')),
+                (one_bnode, BLARG.innerA, rdflib.Literal('a', lang='es')),
                 (one_bnode, BLARG.innerB, rdflib.Literal('b', lang='en')),
                 (one_bnode, BLARG.innerC, rdflib.Literal('c', lang='en')),
                 (two_iri, rdflib.RDF.type, BLARG.Item),
@@ -128,45 +134,57 @@ if __debug__:
 
         def test_render(self):
             actual_json = render_jsonld(self.basket)
-            print(actual_json)
             self.assertEqual(actual_json, '''{
     "@id": "<https://foo.example/one>",
     "@type": [
-        {
-            "@id": "blarg:Item"
-        }
+        "blarg:Item"
     ],
     "blarg:complexProperty": [
         {
             "@type": [
-                {
-                    "@id": "blarg:InnerObject"
-                }
+                "blarg:InnerObject"
             ],
             "blarg:innerA": [
-                "a"
+                {
+                    "@value": "a",
+                    "@language": "en"
+                },
+                {
+                    "@value": "a",
+                    "@language": "es"
+                }
             ],
             "blarg:innerB": [
-                "b"
+                {
+                    "@value": "b",
+                    "@language": "en"
+                }
             ],
             "blarg:innerC": [
-                "c"
+                {
+                    "@value": "c",
+                    "@language": "en"
+                }
             ]
         }
     ],
     "blarg:itemTitle": [
-        "one thing"
+        {
+            "@value": "one thing",
+            "@language": "en"
+        }
     ],
     "blarg:likes": [
         {
             "@id": "<https://foo.example/two>",
             "@type": [
-                {
-                    "@id": "blarg:Item"
-                }
+                "blarg:Item"
             ],
             "blarg:itemTitle": [
-                "two thing"
+                {
+                    "@value": "two thing",
+                    "@language": "en"
+                }
             ]
         }
     ]

@@ -1,6 +1,9 @@
 import contextlib
 import hashlib
-import xml.etree
+from xml.etree.ElementTree import (
+    TreeBuilder,
+    tostring as etree_tostring,
+)
 
 import rdflib
 
@@ -19,14 +22,16 @@ class HtmlBasketCrawler(BasketCrawler):
     @contextlib.contextmanager
     def _crawl_context(self):
         self.itemid_to_elementid = {}
-        self.tree_builder = xml.etree.ElementTree.TreeBuilder()
+        self.tree_builder = TreeBuilder()
         self.tree_builder.start('article', {})
-        yield
-        self.tree_builder.end('article')
+        try:
+            yield
+        finally:
+            self.tree_builder.end('article')
 
     # abstract method from BasketCrawler
     def _crawl_result(self):
-        return xml.etree.ElementTree.tostring(
+        return etree_tostring(
             self.tree_builder.close(),
             encoding='unicode',
             method='html',
@@ -56,8 +61,10 @@ class HtmlBasketCrawler(BasketCrawler):
         yield
 
     # override from BasketCrawler
+    @contextlib.contextmanager
     def _itempropertyvalue_context(self, itemid, property_iri, value_obj):
-        return self._parent_element('dd', {'itemprop': property_iri})
+        with self._parent_element('dd', {'itemprop': property_iri}):
+            yield
 
     # abstract method from BasketCrawler
     def _visit_literal_value(self, itemid, property_iri, literal_value):
@@ -91,8 +98,10 @@ class HtmlBasketCrawler(BasketCrawler):
     @contextlib.contextmanager
     def _parent_element(self, element_name, element_attrs=None):
         self.tree_builder.start(element_name, element_attrs or {})
-        yield
-        self.tree_builder.end(element_name)
+        try:
+            yield
+        finally:
+            self.tree_builder.end(element_name)
 
     def _leaf_element(self, element_name, element_attrs=None, text=None):
         with self._parent_element(element_name, element_attrs):
@@ -114,15 +123,15 @@ if __debug__:
             one_bnode = rdflib.BNode()
             triples = {
                 (one_iri, rdflib.RDF.type, BLARG.Item),
-                (one_iri, BLARG.itemTitle, rdflib.Literal('one thing')),
+                (one_iri, BLARG.itemTitle, rdflib.Literal('one thing', lang='en')),
                 (one_iri, BLARG.likes, two_iri),
                 (one_iri, BLARG.complexProperty, one_bnode),
                 (one_bnode, rdflib.RDF.type, BLARG.InnerObject),
-                (one_bnode, BLARG.innerA, rdflib.Literal('a')),
-                (one_bnode, BLARG.innerB, rdflib.Literal('b')),
-                (one_bnode, BLARG.innerC, rdflib.Literal('c')),
+                (one_bnode, BLARG.innerA, rdflib.Literal('a', lang='en')),
+                (one_bnode, BLARG.innerB, rdflib.Literal('b', lang='en')),
+                (one_bnode, BLARG.innerC, rdflib.Literal('c', lang='en')),
                 (two_iri, rdflib.RDF.type, BLARG.Item),
-                (two_iri, BLARG.itemTitle, rdflib.Literal('two thing')),
+                (two_iri, BLARG.itemTitle, rdflib.Literal('two thing', lang='en')),
             }
             self.basket = Basket(Focus(one_iri, BLARG.Item))
             self.basket.gathered_metadata.bind('blarg', BLARG)
