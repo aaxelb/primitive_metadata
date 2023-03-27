@@ -8,8 +8,8 @@ from gather.basket_crawler import BasketCrawler
 from gather.focus import Focus
 
 
-def render_jsonapi(basket: Basket) -> str:
-    return JsonapiBasketCrawler(basket).crawl()
+# def render_jsonapi(basket: Basket) -> str:
+#     return JsonapiBasketCrawler(basket).crawl()
 
 
 class JsonapiBasketCrawler(BasketCrawler):
@@ -189,7 +189,7 @@ if __debug__:
                 self.basket.gathered_metadata.add(triple)
 
         def test_render(self):
-            actual_json = render_jsonapi(self.basket)
+            actual_json = JsonapiBasketCrawler(self.basket).crawl()
             self.assertEqual(actual_json, '''{
     "data": {
         "id": "<https://foo.example/one>",

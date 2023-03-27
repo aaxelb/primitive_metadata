@@ -5,7 +5,7 @@ BASKET_RENDERER_BY_MEDIATYPE = {
     'text/turtle': turtle.render_turtle,
     'text/html': html.render_html,
     'application/ld+json': jsonld.render_jsonld,
-    'application/api+json': jsonapi.render_jsonapi,
+    # 'application/api+json': jsonapi.render_jsonapi,
 }
 
 
