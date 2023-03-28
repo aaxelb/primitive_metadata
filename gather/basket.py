@@ -87,6 +87,18 @@ class Basket:
         # number of gathered triples
         return len(self.gathered_metadata)
 
+    def with_focus(self, new_focus: Focus):
+        '''return a Basket instance with a new focus, but shared rdfgraph
+
+        TODO: will it hurt (or help) to share a graph among basket instances?
+              consider whether gather-into-basket logic would fit better in a
+              place separate from get-from-basket logic
+        '''
+        new_basket = Basket(new_focus)
+        new_basket.gathered_metadata = self.gathered_metadata
+        new_basket._gathertasks_done = self._gathertasks_done
+        return new_basket
+
     # END public methods
     # # # # # # # # # # #
 
