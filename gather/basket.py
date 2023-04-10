@@ -82,6 +82,8 @@ class Basket:
             predicate=predicate_iri,
             unique=True,
         )
+        # return descriptive message for StopIteration
+        return f'no more objects for (<{focus_iri}>, <{predicate_iri}>, ...)'
 
     def __len__(self):
         # number of gathered triples

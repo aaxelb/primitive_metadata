@@ -8,13 +8,20 @@ from gather.basket import Basket
 from gather.language import LangString
 
 
-class ShaclShape(abc.ABC):
+class ShaclShape:
     '''interface for a portion of RDF graph that conforms with a SHACL shape
     '''
-    # required constants for each shape class:
-    IRI = None
-    NAME = None
-    DESCRIPTION = None
+    def __init__(self, iri, shacl_graph):
+        self.iri = iri
+        self._shacl_graph = shacl_graph
+
+    @property
+    def name(self):
+        return next(self._shacl_graph.objects(self.iri, SHACL.name|RDFS.label))
+
+    @property
+    def description(self):
+        return next(self._basket[SHACL.description|RDFS.comment])
 
     @staticmethod
     def shape_from_shacl(shacl_shape_basket: Basket) -> 'ShaclShape':
@@ -27,7 +34,7 @@ class ShaclShape(abc.ABC):
     @classmethod
     def validate_shape(cls):
         # TODO: specific exceptions
-        assert isinstance(cls.IRI, str)
+        assert isinstance(cls.iri, str)
         assert isinstance(cls.NAME, LangString)
         assert isinstance(cls.DESCRIPTION, LangString)
         # TODO: validate against official shacl-shacl
@@ -59,21 +66,30 @@ if __debug__:
 
     BLRGL = rdflib.Namespace('ftp://blrgl.example/vocab/')
 
-    @dataclasses.dataclass
-    class LilShape(ShaclShape):
-        IRI = BLRGL.LilShape
-        NAME = LangString(('en', 'LilShape'))
-        DESCRIPTION = LangString(
-            ('en', (
-                'LilShape is a little shape (where "little" is '
-                'abbreviated "lil") intended for testing ShaclShape'
-            )),
-        )
+    LILSHAPE_TURTLE = '''
+@prefix shacl: http://www.w3.org/ns/shacl#
+@prefix rdfs: http://www.w3.org/2000/01/rdf-schema#
+@prefix blrgl: ftp://blrgl.example/vocab/
 
-        # LilShape properties
-        # python tries to parse iri as typehint: `blarg: BLRGL.blarg`
-        txt: rdflib.RDF.langString
+blrgl:LilShape a shacl:NodeShape ;
+    shacl:name "LilShape"@en ;
+    shacl:description """
+LilShape is a little shape (where 'little' is abbreviated
+'lil') intended for testing ShaclShape."""@en ;
+    shacl:property [
+        shacl:path blrgl:txt ;
+        shacl:datatype rdf:langString ;
+    ] ,
+    [
+        shacl:path (blrgl:foo blrgl:bar blrgl:baz) ;
+        shacl:class blrgl:FooBarBazd
+    ]
+'''
 
     class LilShapeTest(unittest.TestCase):
+        def setUp(self):
+            lilshape_basket = Basket.
+            self.lil_shape = ShaclShape(Basket.fro
+
         def test_valid(self):
-            self.assertTrue(LilShape.validate_shape())
+            self.assertTrue(self.LilShape.validate_shape())
