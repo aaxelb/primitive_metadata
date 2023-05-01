@@ -1,4 +1,6 @@
 import dataclasses
+import typing
+
 import rdflib
 
 
@@ -16,6 +18,9 @@ class Focus:
             assert isinstance(self.rdftype, rdflib.URIRef)
         except AssertionError as err:
             raise ValueError from err
+
+    def as_triples(self) -> typing.Iterable[tuple]:
+        yield (self.iri, rdflib.RDF.type, self.rdftype)
 
 
 if __debug__:
@@ -50,5 +55,13 @@ if __debug__:
                 with self.assertRaises(ValueError):
                     Focus(rdftype=bad_args[1], iri=bad_args[0])
 
-    if __name__ == '__main__':
-        unittest.main()
+        def test_triples(self):
+            phee = Focus(BLERG.phee, BLERG.Blerg)
+            phi = Focus(rdftype=BLERG.Blirg, iri=BLERG.phi)
+            pho = Focus(rdftype=BLERG.Blorg, iri=BLERG.pho)
+            phum = Focus(BLERG.phum, BLERG.Blurg)
+            for f in {phee, phi, pho, phum}:
+                assert (
+                    set(f.as_triples())
+                    == {(f.iri, rdflib.RDF.type, f.rdftype)}
+                )

@@ -4,6 +4,10 @@ import typing
 import rdflib
 
 
+def text(literal_text: str, *, language: str):
+    return rdflib.Literal(literal_text, lang=language)
+
+
 @dataclasses.dataclass
 class LangString:
     language_text_pairs: typing.Iterable[tuple]

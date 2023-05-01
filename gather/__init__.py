@@ -19,11 +19,14 @@ __all__ = ('er', 'Focus', 'Basket',)
 
 
 if __debug__:
+    # implement "load_tests protocol" for unittest;
+    # tests for each module put in a block wrapped
+    # by `if __debug__:` (so they'll be ignored if
+    # python is started with `-O`, for "Optimize")
     import unittest
 
     MODULES_WITH_TESTS = (focus, gatherer, basket, render)
 
-    # implement "load_tests protocol" for unittest
     def load_tests(loader, tests, pattern):
         suite = unittest.TestSuite()
         for module in MODULES_WITH_TESTS:
