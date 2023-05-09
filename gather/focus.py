@@ -19,7 +19,7 @@ class Focus:
         except AssertionError as err:
             raise ValueError from err
 
-    def as_triples(self) -> typing.Iterable[tuple]:
+    def as_rdf_tripleset(self) -> typing.Iterable[tuple]:
         yield (self.iri, rdflib.RDF.type, self.rdftype)
 
 
@@ -62,6 +62,6 @@ if __debug__:
             phum = Focus(BLERG.phum, BLERG.Blurg)
             for f in {phee, phi, pho, phum}:
                 assert (
-                    set(f.as_triples())
+                    set(f.as_rdf_tripleset())
                     == {(f.iri, rdflib.RDF.type, f.rdftype)}
                 )

@@ -99,7 +99,7 @@ if __debug__:
 
     BLARG = rdflib.Namespace('https://blarg.example/blarg/')
 
-    class SimpleBasketHtmlTest(unittest.TestCase):
+    class SimpleBasketJsonldTest(unittest.TestCase):
         maxDiff = None
 
         def setUp(self):

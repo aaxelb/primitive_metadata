@@ -22,7 +22,6 @@ class Basket:
     _gathertasks_done: set           # memory of gather-work already done,
     _focus_set_by_iri: dict          # of items we could learn more about.
 
-
     # # # # # # # # # # # #
     # BEGIN public methods
 
@@ -142,28 +141,19 @@ class Basket:
                 predicate_iri: None
                 for predicate_iri in predicate_map
             }
-        predicates_to_gather = set(predicate_map.keys())
-        for predicate_iri, next_steps in predicate_map.items()
         for gatherer in get_gatherers(focus.rdftype, predicate_map.keys()):
-            for (subj, pred, obj) in self._do_a_gathertask(gatherer, focus):
-                if isinstance(obj, Focus):
-                    self._add_focus_reference(obj)
-                    self.gathered_metadata.add((subj, pred, obj.iri))
-                    if subj == focus.iri:
-                        next_steps = predicate_map.get(pred, None)
-                        if next_steps:
-                            self._do_gather(
-                                focus=obj,
-                                predicate_map=next_steps,
-                            )
-                else:
-                    self.gathered_metadata.add((subj, pred, obj))
-
-    def _ensure_gathered(self, focus, predicate_iri):
-        if (predicate_iri, focus) not in self._predicates_asked:
-            self._predicates_asked.add((predicate_iri, focus))
-            for gatherer in get_gatherers(focus.rdftype, [predicate_iri]):
-                self._maybe_do_a_gathertask(gatherer, focus)
+            self._maybe_do_a_gathertask(gatherer, focus)
+        for predicate_iri, next_steps in predicate_map.items():
+            if next_steps:
+                next_subjects = (
+                    self.gathered_metadata
+                    .objects(focus.iri, predicate_iri)
+                )
+                for next_subject_iri in next_subjects:
+                    self._maybe_gather_for_predicate_map(
+                        next_subject_iri,
+                        next_steps,
+                    )
 
     def _maybe_do_a_gathertask(self, gatherer: Gatherer, focus: Focus):
         '''invoke gatherer with the given focus
@@ -177,8 +167,8 @@ class Basket:
     def _do_a_gathertask(self, gatherer, focus):
         for (subj, pred, obj) in gatherer(focus):
             if isinstance(obj, Focus):
-                self._add_known_focus(obj)
                 self.gathered_metadata.add((subj, pred, obj.iri))
+                self._add_known_focus(obj)
             else:
                 self.gathered_metadata.add((subj, pred, obj))
 
@@ -188,7 +178,7 @@ class Basket:
             .setdefault(focus.iri, set())
             .add(focus)
         )
-        for triple in focus.as_triples():
+        for triple in focus.as_rdf_tripleset():
             self.gathered_metadata.add(triple)
 
 
@@ -208,65 +198,88 @@ if __debug__:
 
         def test_goodbasket(self):
             focus = Focus(BLARG.item, BLARG.Type)
+            related_focus = Focus(BLARG.borked, BLARG.TypeBork)
             # define some mock gatherer functions
             mock_zork = unittest.mock.Mock(return_value=(
                 (BLARG.item, BLARG.zork, BLARG.zorked),
             ))
             mock_bork = unittest.mock.Mock(return_value=(
-                (BLARG.item, BLARG.bork, BLARG.borked),
-                (BLARG.borked, BLARG.lork, BLARG.borklorked),
+                (BLARG.item, BLARG.bork, related_focus),
             ))
             mock_hork = unittest.mock.Mock(return_value=(
                 (BLARG.item, BLARG.hork, BLARG.horked),
             ))
+            mock_lork = unittest.mock.Mock(return_value=(
+                (BLARG.borked, BLARG.lork, BLARG.borklorked),
+            ))
             # register the mock gatherer functions
             gatherer_decorator(BLARG.zork)(mock_zork)
             gatherer_decorator(BLARG.bork)(mock_bork)
+            gatherer_decorator(
+                BLARG.lork,
+                focustype_iris=[BLARG.TypeBork],
+            )(mock_lork)
             gatherer_decorator(BLARG.hork)(mock_hork)
             # check basket organizes gatherers as expected
             basket = Basket(focus)
             self.assertEqual(basket.focus, focus)
             self.assertTrue(isinstance(basket.gathered_metadata, rdflib.Graph))
-            self.assertEqual(len(basket), 0)
+            # at start, no gatherers run
+            self.assertFalse(mock_zork.called)
+            self.assertFalse(mock_bork.called)
+            self.assertFalse(mock_lork.called)
+            self.assertFalse(mock_hork.called)
+            self.assertEqual(len(basket), 1)
             self.assertEqual(len(basket._gathertasks_done), 0)
-            # no repeat gathertasks:
-            mock_zork.assert_not_called()
-            mock_bork.assert_not_called()
-            mock_hork.assert_not_called()
-            basket.pls_gather({BLARG.zork})
-            mock_zork.assert_called_once()
-            mock_bork.assert_not_called()
-            mock_hork.assert_not_called()
+            # zork (should gather)
+            self.assertEqual(
+                set(basket[BLARG.zork]),
+                {BLARG.zorked},
+            )
+            self.assertEqual(mock_zork.call_count, 1)
+            self.assertFalse(mock_bork.called)
+            self.assertFalse(mock_lork.called)
+            self.assertFalse(mock_hork.called)
             self.assertEqual(len(basket), 2)
             self.assertEqual(len(basket._gathertasks_done), 1)
-            basket.pls_gather({BLARG.zork, BLARG.bork})
-            mock_zork.assert_called_once()
-            mock_bork.assert_called_once()
-            mock_hork.assert_not_called()
+            # bork (should gather)
+            self.assertEqual(
+                set(basket[BLARG.bork]),
+                {BLARG.borked},
+            )
+            self.assertEqual(mock_zork.call_count, 1)
+            self.assertEqual(mock_bork.call_count, 1)
+            self.assertFalse(mock_lork.called)
+            self.assertFalse(mock_hork.called)
             self.assertEqual(len(basket), 4)
             self.assertEqual(len(basket._gathertasks_done), 2)
-            basket.pls_gather({BLARG.bork})
-            mock_zork.assert_called_once()
-            mock_bork.assert_called_once()
-            mock_hork.assert_not_called()
-            self.assertEqual(len(basket), 4)
-            self.assertEqual(len(basket._gathertasks_done), 2)
-            basket.pls_gather({BLARG.bork, BLARG.zork, BLARG.hork})
-            mock_zork.assert_called_once()
-            mock_bork.assert_called_once()
-            mock_hork.assert_called_once()
-            self.assertEqual(len(basket), 5)
-            self.assertEqual(len(basket._gathertasks_done), 3)
-            # __getitem__:
-            self.assertEqual(set(basket[BLARG.zork]), {BLARG.zorked})
-            self.assertEqual(set(basket[BLARG.bork]), {BLARG.borked})
-            self.assertEqual(set(basket[BLARG.hork]), {BLARG.horked})
-            self.assertEqual(set(basket[BLARG.somethin_else]), set())
-            # __getitem__ path:
+            # borklork (should gather lork, but not bork)
             self.assertEqual(
                 set(basket[BLARG.bork / BLARG.lork]),
                 {BLARG.borklorked},
             )
+            self.assertEqual(mock_zork.call_count, 1)
+            self.assertEqual(mock_bork.call_count, 1)
+            self.assertEqual(mock_lork.call_count, 1)
+            self.assertFalse(mock_hork.called)
+            self.assertEqual(len(basket), 5)
+            self.assertEqual(len(basket._gathertasks_done), 3)
+            # bork again (should not regather)
+            assert set(basket[BLARG.bork]) == {BLARG.borked}
+            self.assertEqual(mock_zork.call_count, 1)
+            self.assertEqual(mock_bork.call_count, 1)
+            self.assertEqual(mock_lork.call_count, 1)
+            self.assertFalse(mock_hork.called)
+            self.assertEqual(len(basket), 5)
+            self.assertEqual(len(basket._gathertasks_done), 3)
+            # hork (should gather)
+            assert set(basket[BLARG.hork]) == {BLARG.horked}
+            self.assertEqual(mock_zork.call_count, 1)
+            self.assertEqual(mock_bork.call_count, 1)
+            self.assertEqual(mock_lork.call_count, 1)
+            self.assertEqual(mock_hork.call_count, 1)
+            self.assertEqual(len(basket), 6)
+            self.assertEqual(len(basket._gathertasks_done), 4)
             # __getitem__ slice:
             self.assertEqual(
                 set(basket[BLARG.item:BLARG.zork]),
@@ -280,6 +293,5 @@ if __debug__:
             )
             # reset:
             basket.reset()
-            self.assertEqual(len(basket), 0)
-            self.assertEqual(len(basket), 0)
+            self.assertEqual(len(basket), 1)
             self.assertEqual(len(basket._gathertasks_done), 0)

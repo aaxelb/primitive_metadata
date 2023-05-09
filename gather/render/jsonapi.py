@@ -8,7 +8,7 @@ from gather.basket_crawler import BasketCrawler
 from gather.focus import Focus
 
 
-# def render_jsonapi(basket: Basket) -> str:
+# def render_jsonapi(basket: Basket, ) -> str:
 #     return JsonapiBasketCrawler(basket).crawl()
 
 

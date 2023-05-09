@@ -109,10 +109,6 @@ class BasketCrawler(abc.ABC):
 #
 
     @abc.abstractmethod
-    def _crawl_result(self):
-        raise NotImplementedError
-
-    @abc.abstractmethod
     def _visit_literal_value(self, itemid, property_iri, literal_value):
         raise NotImplementedError
 
@@ -124,25 +120,25 @@ class BasketCrawler(abc.ABC):
     def _visit_iri_reference(self, itemid, property_iri, iri):
         raise NotImplementedError
 
+    @abc.abstractmethod
+    def _crawl_result(self):
+        raise NotImplementedError
+
     # optional override
-    @contextlib.contextmanager
     def _crawl_context(self):
-        yield
+        return contextlib.nullcontext()
 
     # optional override
-    @contextlib.contextmanager
     def _item_context(self, itemid):
-        yield
+        return contextlib.nullcontext()
 
     # optional override
-    @contextlib.contextmanager
     def _itemproperty_context(self, itemid, property_iri):
-        yield
+        return contextlib.nullcontext()
 
     # optional override
-    @contextlib.contextmanager
     def _itempropertyvalue_context(self, itemid, property_iri, value_obj):
-        yield
+        return contextlib.nullcontext()
 
     # optional override
     def _property_sort_key(self, property_iri):
@@ -168,6 +164,8 @@ class BasketCrawler(abc.ABC):
             )
         self.__items_visiting.add(itemid)
         self.__items_visited.add(itemid)
-        with self._item_context(itemid):
-            yield
-        self.__items_visiting.remove(itemid)
+        try:
+            with self._item_context(itemid):
+                yield
+        finally:
+            self.__items_visiting.remove(itemid)

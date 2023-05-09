@@ -2,8 +2,10 @@ from gather.language import LangString
 from gather.shacl_shape import ShaclShape
 
 
+@shacldataclass(
+    GATHER.DefinedWord
+)
 class DefinedWord(ShaclShape):
-    IRI = GATHER.DefinedWord
     NAME = LangString(
         ('en', 'DefinedWord'),
     )
