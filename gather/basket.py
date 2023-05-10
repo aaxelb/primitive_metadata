@@ -88,7 +88,10 @@ class Basket:
             unique=True,
         )
         # return a descriptive message for StopIteration
-        return f'no more objects for focus_iri=<{focus_iri}> path={path}'
+        return f'{self}: no more objects for focus_iri=<{focus_iri}> path={path}'
+
+    def __str__(self):
+        return f'{self.__class__.__qualname__}({self.focus})'
 
     def __len__(self):
         # number of gathered triples
