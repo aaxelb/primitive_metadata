@@ -1,5 +1,7 @@
+import abc
 import contextlib
 import json
+import re
 
 import rdflib
 
@@ -8,8 +10,109 @@ from gather.basket_crawler import BasketCrawler
 from gather.focus import Focus
 
 
+# https://jsonapi.org/format/#document-member-names-allowed-characters
+JSONAPI_MEMBER_NAME = re.compile(r'\b[a-zA-Z0-9][-_a-zA-Z0-9]*\b')
+
+
 # def render_jsonapi(basket: Basket, ) -> str:
 #     return JsonapiBasketCrawler(basket).crawl()
+
+class JsonapiRenderConfig(abc.ABC):
+    '''subclass with your own api's names and assumptions
+    '''
+
+    # TODO: use to build linked-data context
+
+    @abc.abstractmethod
+    def iri_to_docid(self, iri) -> str:
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def should_render_in_place(self, predicate_iri) -> bool:
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def type_iris(self) -> dict[str, rdflib.URIRef]:
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def get_attribute_iris(self) -> dict[str, rdflib.URIRef]:
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def get_relationship_iris(self) -> dict[str, rdflib.URIRef]:
+        raise NotImplementedError
+
+    @property
+    def attribute_iris_by_name(self):
+        try:
+            return self.__attribute_iris_by_name
+        except AttributeError:
+            self.__attribute_iris_by_name = self.get_attribute_iris()
+            return self.__attribute_iris_by_name
+
+    @property
+    def relationship_iris_by_name(self):
+        try:
+            return self.__relationship_iris
+        except AttributeError:
+            self.__relationship_iris = self.get_relationship_iris()
+            return self.__relationship_iris
+
+    @property
+    def attribute_names_by_iri(self):
+        try:
+            return self.__attribute_names_by_iri
+        except AttributeError:
+            self.__attribute_names_by_iri = {
+                value: key
+                for key, value in self.attribute_iris_by_name
+            }
+            return self.__attribute_names_by_iri
+
+    @property
+    def relationship_names_by_iri(self):
+        try:
+            return self.__relationship_names_by_iri
+        except AttributeError:
+            self.__relationship_names_by_iri = {
+                value: key
+                for key, value in self.get_relationship_iris()
+            }
+            return self.__relationship_names_by_iri
+
+    def is_relationship(self, iri):
+        return iri in self.relationship_names_by_iri
+
+    def assert_valid_self(self):
+        attrs_by_name = self.attribute_iris_by_name
+        attrs_by_iri = self.attribute_iris_by_iri
+        relations_by_name = self.relationship_iris_by_name
+        relations_by_iri = self.relationship_names_by_iri
+        for by_name in (attrs_by_name, relations_by_name):
+            for name, iri in by_name.items():
+                assert JSONAPI_MEMBER_NAME.fullmatch(name)
+                assert isinstance(iri, rdflib.URIRef)
+        for by_iri in (attrs_by_iri, relations_by_iri):
+            for iri, name in by_iri.items():
+                assert isinstance(iri, rdflib.URIRef)
+                assert JSONAPI_MEMBER_NAME.fullmatch(name)
+        nonintersecting_pairs = (
+            (attrs_by_name.keys(), relations_by_name.keys()),
+            (attrs_by_iri.keys(), relations_by_iri.keys()),
+            (attrs_by_name.values(), relations_by_name.values()),
+            (attrs_by_iri.values(), relations_by_iri.values()),
+        )
+        equal_pairs = (
+            (attrs_by_name.keys(), attrs_by_iri.values()),
+            (attrs_by_iri.keys(), attrs_by_name.values()),
+            (relations_by_name.keys(), relations_by_iri.values()),
+            (relations_by_iri.keys(), relations_by_name.values()),
+        )
+        for (one, another) in nonintersecting_pairs:
+            assert not set(one).intersection(another)
+        for (one, another) in equal_pairs:
+            assert set(one) == set(another)
 
 
 class JsonapiBasketCrawler(BasketCrawler):
@@ -17,16 +120,9 @@ class JsonapiBasketCrawler(BasketCrawler):
     # to behave as expected -- allow specifying which metadata properties
     # should be represented as "related resources" (otherwise will be
     # attributes with json-object values)
-    def __init__(self, basket, relationship_iris=None):
-        self._relationship_iris = set(relationship_iris or ())
+    def __init__(self, basket, jsonapi_render_config: JsonapiRenderConfig):
         super().__init__(basket)
-
-    # TODO: accept map from iri to member_name? use for linked-data context
-    # https://jsonapi.org/format/#document-member-names-allowed-characters
-    # def _display_iri(self, iri):
-
-    def _is_relationship(self, property_iri):
-        return property_iri in self._relationship_iris
+        self._jsonapi_config = jsonapi_render_config
 
     # abstract method from BasketCrawler
     def _crawl_result(self):
@@ -51,32 +147,23 @@ class JsonapiBasketCrawler(BasketCrawler):
     # override from BasketCrawler
     @contextlib.contextmanager
     def _item_context(self, itemid):
-        if not self._rendering_in_place:
-            jsonapi_resource = {
-                'id': self._display_iri(itemid),
-                # TODO: 'type': self._display_iri(...),
-                'attributes': {},
-                'relationships': {},
-            }
-            if self._primary_data is None:
-                self._primary_data = jsonapi_resource
-            elif not self._rendering_in_place:
-                self._included.append(jsonapi_resource)
-
+        jsonapi_resource = {
+            'id': self._display_iri(itemid),
+            # TODO: 'type': self._display_iri(...),
+            'attributes': {},
+            'relationships': {},
+        }
+        if self._primary_data is None:
+            self._primary_data = jsonapi_resource
+        else:
+            self._included.append(jsonapi_resource)
         last_item = self._current_item
         item_dict = self._current_item = {}
         try:
             yield  # crawl item property/value
         finally:
             self._current_item = last_item
-
-        if self._rendering_in_place:
-            self._current_values.append({
-                self._display_iri(property_iri): values
-                for property_iri, values in item_dict.items()
-            })
-        else:
-            self._update_jsonapi_resource(jsonapi_resource, item_dict)
+        self._update_jsonapi_resource(jsonapi_resource, item_dict)
 
     # override from BasketCrawler
     @contextlib.contextmanager
