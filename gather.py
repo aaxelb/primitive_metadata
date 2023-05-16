@@ -9,7 +9,7 @@ __all__ = ('Text', 'Focus', 'IriNamespace', 'Gathering', 'Basket')
 
 import contextlib
 import copy
-import dataclasses  # python 3.10+ (could do without dataclasses for wider support...)
+import dataclasses  # python 3.10+ (maybe NamedTuple for better support?)
 import datetime
 import functools
 import itertools
@@ -46,6 +46,25 @@ RdfDictionary = dict[
         set[RdfObject],
     ]
 ]
+
+# a "gatherer" function yields information about a given focus
+GathererYield = typing.Union[
+    RdfTriple,  # using the rdf triple as basic unit of information
+    RdfTwople,  # may omit subject (assumed iri of the given focus)
+    # may yield a tuple containing `None`; will silently discard it
+    tuple[
+        typing.Optional[RdfSubject],
+        typing.Optional[RdfPredicate],
+        typing.Optional[RdfObject],
+    ],
+    tuple[
+        typing.Optional[RdfPredicate],
+        typing.Optional[RdfObject],
+    ],
+]
+Gatherer = typing.Callable[['Focus'], typing.Iterable[GathererYield]]
+# when decorated, the yield is tidied into reliable triples
+DecoratedGatherer = typing.Callable[['Focus'], typing.Iterable[RdfTriple]]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -216,25 +235,6 @@ if __debug__:
                 my_subvocab['🦎'],
                 'https://blarg.example/my-subvocab/🦎',
             )
-
-# a gatherer function yields information about a given focus
-GathererYield = typing.Union[
-    RdfTriple,  # using the rdf triple as basic unit of information
-    RdfTwople,  # may omit subject (assumed iri of the given focus)
-    # may yield a tuple containing `None`; will silently discard it
-    tuple[
-        typing.Optional[RdfSubject],
-        typing.Optional[RdfPredicate],
-        typing.Optional[RdfObject],
-    ],
-    tuple[
-        typing.Optional[RdfPredicate],
-        typing.Optional[RdfObject],
-    ],
-]
-Gatherer = typing.Callable[[Focus], typing.Iterable[GathererYield]]
-# when decorated, the yield is tidied into reliable triples
-DecoratedGatherer = typing.Callable[[Focus], typing.Iterable[RdfTriple]]
 
 
 class Gathering:
@@ -424,6 +424,7 @@ class Basket:
         # TODO: microdata, css, language tags
         from xml.etree.ElementTree import TreeBuilder, tostring
         html_builder = TreeBuilder()
+        # define some local helpers:
 
         @contextlib.contextmanager
         def _nest(tag_name, attrs=None):
@@ -437,39 +438,42 @@ class Basket:
                 html_builder.data(text)
             html_builder.end(tag_name)
 
+        def _list(predicate_dict, attrs=None):
+            with _nest('ul', (attrs or {})):
+                for pred, obj_set in predicate_dict.items():
+                    with _nest('li'):
+                        _leaf('span', text=pred)  # TODO: <a href>
+                        with _nest('ul'):
+                            for obj in obj_set:
+                                with _nest('li'):
+                                    _value(obj)
+
         def _blanknode(blanknode: RdfBlankNode):
             blanknode_as_dict = {}
             for pred, obj in blanknode:
                 blanknode_as_dict.setdefault(pred, set()).add(obj)
-            _infolist(blanknode_as_dict)
+            _list(blanknode_as_dict)
 
-        def _infolist(predicate_dict):
-            with _nest('ul'):
-                for pred, obj_set in predicate_dict.items():
-                    with _nest('li'):
-                        # TODO: links
-                        _leaf('span', text=pred)
-                        with _nest('ul'):
-                            for obj in obj_set:
-                                with _nest('li'):
-                                    if isinstance(obj, frozenset):
-                                        _blanknode(obj)
-                                    elif isinstance(obj, Text):
-                                        # TODO language tag
-                                        _leaf('span', text=str(obj))
-                                    elif isinstance(obj, str):
-                                        # TODO link to anchor on this page?
-                                        _leaf('a', text=obj)
-                                    elif isinstance(obj, (float, int, datetime.date)):
-                                        # TODO datatype?
-                                        _leaf('span', text=str(obj))
-
+        def _value(obj):
+            if isinstance(obj, frozenset):
+                _blanknode(obj)
+            elif isinstance(obj, Text):
+                # TODO language tag
+                _leaf('span', text=str(obj))
+            elif isinstance(obj, str):
+                # TODO link to anchor on this page?
+                _leaf('a', text=obj)
+            elif isinstance(obj, (float, int, datetime.date)):
+                # TODO datatype?
+                _leaf('span', text=str(obj))
+        # now start calling helpers to build an <article>
+        # element of everything gathered thru this Basket
         with _nest('article'):
             _leaf('h1', text=str(self.focus))  # TODO: shortened display name
             for subj, predicate_dict in self.__tripledict.items():
                 with _nest('section'):
                     _leaf('h2', text=subj)
-                    _infolist(predicate_dict)
+                    _list(predicate_dict)
         return tostring(
             html_builder.close(),
             encoding='unicode',
