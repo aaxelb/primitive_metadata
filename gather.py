@@ -7,9 +7,10 @@ mindset metaphor:
 '''
 __all__ = ('Text', 'Focus', 'IriNamespace', 'Gathering', 'Basket')
 
+# standard-library imports
 import contextlib
 import copy
-import dataclasses  # python 3.10+ (maybe NamedTuple for better support?)
+import dataclasses  # python 3.10+ (could NamedTuple for better support?)
 import datetime
 import functools
 import itertools
@@ -22,31 +23,45 @@ if __debug__:  # examples/tests thru-out, wrapped in `__debug__`
     import unittest
 
 
-# a `typing` description of how this toolkit represents
-# RDF data with (mostly) python primitives:
+###
+# here are some type declarations to describe how this toolkit implements a
+# particular subset of RDF concepts (https://www.w3.org/TR/rdf11-concepts/)
+# using (mostly) immutable python primitives
 RdfSubject = str    # IRI (not a blank node)
 RdfPredicate = str  # IRI
 RdfObject = typing.Union[
     str,             # IRI references as plain strings
-    'Text',          # text with required language iri
+    'Text',          # language tags required for Text
     int, float,      # use primitives for numeric data
-    datetime.date,   # with built-in date and datetime
-    'RdfBlankNode',  # blank-node frozenset, see below
+    datetime.date,   # use date and datetime built-ins
+    'RdfBlankNode',  # reduce blank nodes to objects
 ]
 RdfTriple = tuple[RdfSubject, RdfPredicate, RdfObject]
 RdfTwople = tuple[RdfPredicate, RdfObject]  # implicit subject
 RdfBlankNode = frozenset[RdfTwople]
 
-# use a dictionary to represent an RDF graph
-# (is the only mutable/unhashable type here)
-RdfDictionary = dict[
-    RdfSubject,
-    dict[
-        RdfPredicate,
-        set[RdfObject],
-    ]
-]
+# an RDF graph as a dictionary of dictionaries
+# note: these are the only mutable "Rdf" types
+RdfTwopleDictionary = dict[RdfPredicate, set[RdfObject]]
+RdfDictionary = dict[RdfSubject, RdfTwopleDictionary]
 
+
+def freeze_twoples(twople_dict: RdfTwopleDictionary) -> RdfBlankNode:
+    return frozenset(
+        (pred, obj)
+        for pred, obj_set in twople_dict.items()
+        for obj in obj_set
+    )
+
+
+def unfreeze_twoples(twoples: RdfBlankNode) -> RdfTwopleDictionary:
+    twople_dict = {}
+    for pred, obj in twoples:
+        twople_dict.setdefault(pred, set()).add(obj)
+    return twople_dict
+
+
+###
 # a "gatherer" function yields information about a given focus
 GathererYield = typing.Union[
     RdfTriple,  # using the rdf triple as basic unit of information
@@ -63,7 +78,7 @@ GathererYield = typing.Union[
     ],
 ]
 Gatherer = typing.Callable[['Focus'], typing.Iterable[GathererYield]]
-# when decorated, the yield is tidied into reliable triples
+# when decorated, the yield is tidied into triples
 DecoratedGatherer = typing.Callable[['Focus'], typing.Iterable[RdfTriple]]
 
 
@@ -93,10 +108,14 @@ class Focus:
             frozen_type_iris = (
                 frozenset((self.type_iris,))
                 if isinstance(self.type_iris, str)
-                else frozenset(self.type_iris)  # exception for non-iterable
+                else frozenset(self.type_iris)
             )
             # using object.__setattr__ because frozen dataclass
             object.__setattr__(self, 'type_iris', frozen_type_iris)
+
+    def as_rdf_tripleset(self) -> typing.Iterable[RdfTriple]:
+        for type_iri in self.type_iris:
+            yield (self.iri, RDF.type, type_iri)
 
 
 if __debug__:
@@ -122,15 +141,15 @@ class IriNamespace:
     makes enough sense given context), but this toolkit does not check
     for locatorishness and treats any IRI like an IRN ("N" for "Name")
     '''
-    def __init__(self, iri: str, *, namestory: NameStory):
-        assert ':' in iri, (
-            # trying out `Text` for translatable error messaging
-            Text(f'expected iri to have a ":" (got "{iri}")', language_iri=IANA_LANGUAGE.en),
-        )
+    def __init__(self, iri: str):  # TODO: name/namestory
+        if ':' not in iri:
+            raise ValueError(
+                # trying out `Text` for translatable error messaging
+                Text(f'expected iri to have a ":" (got "{iri}")',
+                     language_iri=IANA_LANGUAGE.en),
+            )
         # assume python's "private name mangling" will avoid conflicts
         self.__iri = iri
-        self.__name = name
-        self.__description = description
 
     @classmethod
     def namespace_name(cls, namespace: 'IriNamespace'):
@@ -168,6 +187,8 @@ class IriNamespace:
     def __hash__(self):
         return hash(self.__iri)
 
+
+RDF = IriNamespace('http://www.w3.org/1999/02/22-rdf-syntax-ns#')
 
 # `gather.Text` uses an IRI to identify language;
 # use IANA_LANGUAGE to express IETF language tags
@@ -364,31 +385,39 @@ if __debug__:
 
 
 class Basket:
+    __gathered: RdfDictionary
+
     def __init__(self, gathering: Gathering, focus: Focus):
         self.gathering = gathering
         self.focus = focus
-        self.__tripledict = dict()
+        self.reset()
+
+    def reset(self):
+        self.__gathered = dict()
         self.__gathers_done = set()
 
     def pull(self, predicate_shape, *,
              focus=None,
              ) -> typing.Iterable[RdfObject]:
         pull_focus = (focus or self.focus)
+        if isinstance(predicate_shape, str):
+            self.__maybe_gather(pull_focus, {predicate_shape})
+            return self.peek(predicate_shape, focus=pull_focus)
         if isinstance(predicate_shape, dict):
             self.__maybe_gather(pull_focus, predicate_shape.keys())
-            pulled = {}
             for predicate_iri, next_shape in predicate_shape.items():
-                if next_shape:
-                    for next_focus in set(
-                        self.peek(predicate_iri, focus=pull_focus),
-                    ):
-                        self.pull(next_shape, focus=next_focus)  # recursion
-        else:
-            if isinstance(predicate_shape, str):
-                predicate_iris = {predicate_shape}
-            else:  # assume iterable
-                predicate_iris = set(predicate_shape)
-            self.__maybe_gather(focus, predicate_iris)
+                if not next_shape:
+                    continue
+                for obj in self.peek(predicate_iri, focus=pull_focus):
+                    try:
+                        next_focus = self.get_focus_by_iri(obj)
+                    except ValueError:
+                        continue
+                    else:  # recursion:
+                        self.pull(next_shape, focus=next_focus)
+        else:  # assume iterable
+            self.__maybe_gather(set(predicate_shape), focus=pull_focus)
+            return self.peek(predicate_shape, focus=pull_focus)
 
     def peek(self, predicate_iri, *, focus=None) -> typing.Iterable[RdfObject]:
         if focus is None:
@@ -402,20 +431,44 @@ class Basket:
                 f'expected focus to be str or Focus or None (got {focus})'
             )
         yield from (
-            self.__tripledict
+            self.__gathered
             .get(focus_iri, {})
             .get(predicate_iri, set())
         )
 
+    def add(self, subj, predicate, obj):
+        (
+            self.__gathered
+            .setdefault(subj, dict())
+            .setdefault(predicate, set())
+            .add(obj)
+        )
+
+    def get_focus_by_iri(self, iri):
+        try:
+            type_iris = self.__gathered[iri][RDF.type]
+        except KeyError:
+            raise ValueError(f'found no type for "{iri}"')
+        else:
+            return Focus(iri, type_iris=type_iris)
+
+    def __maybe_gather(self, focus, predicate_iris):
+        for gatherer in self.gathering.get_gatherers(focus, predicate_iris):
+            gatherkey = (gatherer, focus)
+            if gatherkey not in self.__gathers_done:
+                self.__gathers_done.add(gatherkey)
+                for (subj, pred, obj) in gatherer(focus):
+                    self.add(subj, pred, obj)
+
     def leaf__dictionary(self, *, pls_copy=False) -> RdfDictionary:
         return (
-            copy.deepcopy(self.__tripledict)
+            copy.deepcopy(self.__gathered)
             if pls_copy
-            else types.MappingProxyType(self.__tripledict)
+            else types.MappingProxyType(self.__gathered)
         )
 
     def leaf__tripleset(self) -> typing.Iterable[tuple]:
-        for subj, predicate_dict in self.__tripledict.items():
+        for subj, predicate_dict in self.__gathered.items():
             for pred, obj_set in predicate_dict.items():
                 for obj in obj_set:
                     yield (subj, pred, obj)
@@ -438,25 +491,19 @@ class Basket:
                 html_builder.data(text)
             html_builder.end(tag_name)
 
-        def _list(predicate_dict, attrs=None):
+        def _twoples(twoples: RdfTwopleDictionary, attrs=None):
             with _nest('ul', (attrs or {})):
-                for pred, obj_set in predicate_dict.items():
+                for pred, obj_set in twoples.items():
                     with _nest('li'):
                         _leaf('span', text=pred)  # TODO: <a href>
                         with _nest('ul'):
                             for obj in obj_set:
                                 with _nest('li'):
-                                    _value(obj)
+                                    _obj(obj)
 
-        def _blanknode(blanknode: RdfBlankNode):
-            blanknode_as_dict = {}
-            for pred, obj in blanknode:
-                blanknode_as_dict.setdefault(pred, set()).add(obj)
-            _list(blanknode_as_dict)
-
-        def _value(obj):
+        def _obj(obj: RdfObject):
             if isinstance(obj, frozenset):
-                _blanknode(obj)
+                _twoples(unfreeze_twoples(obj))
             elif isinstance(obj, Text):
                 # TODO language tag
                 _leaf('span', text=str(obj))
@@ -466,14 +513,16 @@ class Basket:
             elif isinstance(obj, (float, int, datetime.date)):
                 # TODO datatype?
                 _leaf('span', text=str(obj))
-        # now start calling helpers to build an <article>
-        # element of everything gathered thru this Basket
+
+        # now use those helpers to build an <article>
+        # with all the info gathered thru this Basket
         with _nest('article'):
             _leaf('h1', text=str(self.focus))  # TODO: shortened display name
-            for subj, predicate_dict in self.__tripledict.items():
+            for subj, predicate_dict in self.__gathered.items():
                 with _nest('section'):
                     _leaf('h2', text=subj)
-                    _list(predicate_dict)
+                    _twoples(predicate_dict)
+        # and serialize as str
         return tostring(
             html_builder.close(),
             encoding='unicode',
@@ -490,7 +539,7 @@ class Basket:
         except ImportError:
             raise GatherException(
                 Text(
-                    'gather.Basket.leaf__rdflib depends on rdflib',
+                    'Basket.leaf__rdflib depends on rdflib',
                     language_iri=IANA_LANGUAGE.en,
                 ),
             )
@@ -538,22 +587,6 @@ class Basket:
                 leafed_graph.add(rdflib_triple)
         return leafed_graph
 
-    def _add(self, subj, predicate, obj):
-        (
-            self.__tripledict
-            .setdefault(subj, dict())
-            .setdefault(predicate, set())
-            .add(obj)
-        )
-
-    def __maybe_gather(self, focus, predicate_iris):
-        for gatherer in self.gathering.get_gatherers(focus, predicate_iris):
-            gatherkey = (gatherer, focus)
-            if gatherkey not in self.__gathers_done:
-                self.__gathers_done.add(gatherkey)
-                for (subj, pred, obj) in gatherer(focus):
-                    self._add(subj, pred, obj)
-
 
 if __debug__:
     class BasketExample(unittest.TestCase):
@@ -571,3 +604,6 @@ if __debug__:
                 set(blargsket.pull(BLARG.unknownpredicate)),
                 set(),
             )
+
+
+
