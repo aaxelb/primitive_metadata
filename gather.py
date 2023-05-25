@@ -25,6 +25,7 @@ import copy
 import datetime
 import functools
 import itertools
+import logging
 import types
 import typing
 
@@ -32,6 +33,9 @@ if __debug__:  # examples/tests thru-out, wrapped in `__debug__`
     # run tests with the command `python3 -m unittest gather.py`
     # (or discard tests with `-O` or `-OO` command-line options)
     import unittest
+
+
+logger = logging.getLogger(__name__)
 
 
 class Text(typing.NamedTuple):
@@ -878,8 +882,14 @@ if __debug__:
             'kia ora',
             language_iris={IANA_LANGUAGE.mi},
         ))
-        yield (BLARG.greeting, Text.new('hola', language_iris={IANA_LANGUAGE.es}))
-        yield (BLARG.greeting, Text.new('hello', language_iris={IANA_LANGUAGE.en}))
+        yield (BLARG.greeting, Text.new(
+            'hola',
+            language_iris={IANA_LANGUAGE.es},
+        ))
+        yield (BLARG.greeting, Text.new(
+            'hello',
+            language_iris={IANA_LANGUAGE.en},
+        ))
 
     @BlargAtheringNorms.gatherer(focustype_iris={BLARG.SomeType})
     def blargather_focustype(focus: Focus):
@@ -961,3 +971,80 @@ if __debug__:
                 set(blargsket.ask(BLARG.unknownpredicate)),
                 set(),
             )
+
+try:
+    import dataclasses
+except ImportError:
+    logger.info(
+        'gather.py: dataclasses not available; omitting dataclass utilities',
+    )
+else:
+    def dataclass_as_twoples(
+        dataclass_instance,
+        iri_by_fieldname: dict,
+    ) -> typing.Iterable[RdfTwople]:
+        for dataclass_field in dataclasses.fields(dataclass_instance):
+            field_value = getattr(
+                dataclass_instance,
+                dataclass_field.name,
+                None,
+            )
+            if field_value is not None:
+                try:
+                    yield (iri_by_fieldname[dataclass_field.name], field_value)
+                except KeyError:
+                    pass
+                field_iris = dataclass_field.metadata.get(OWL.sameAs, ())
+                for field_iri in field_iris:
+                    yield (field_iri, field_value)
+
+    def dataclass_as_blanknode(
+        dataclass_instance,
+        iri_by_fieldname,
+    ) -> RdfBlanknode:
+        return frozenset(
+            dataclass_as_twoples(dataclass_instance, iri_by_fieldname),
+        )
+
+    if __debug__:
+        @dataclasses.dataclass
+        class BlargDataclass:
+            foo: str = dataclasses.field(metadata={
+                OWL.sameAs: {BLARG.foo},
+            })
+            bar: str  # unadorned
+
+        class TestBlarg(unittest.TestCase):
+            def test_as_twoples(self):
+                blarg = BlargDataclass(foo='foo', bar='bar')
+                self.assertEqual(
+                    set(dataclass_as_twoples(blarg, {})),
+                    {(BLARG.foo, 'foo')},
+                )
+                self.assertEqual(
+                    set(dataclass_as_twoples(blarg, {'bar': BLARG.barrr})),
+                    {
+                        (BLARG.foo, 'foo'),
+                        (BLARG.barrr, 'bar'),
+                    },
+                )
+                self.assertEqual(
+                    set(dataclass_as_twoples(blarg, {
+                        'foo': BLARG.fool,
+                        'bar': BLARG.barr,
+                        'baz': BLARG.baz,
+                    })),
+                    {
+                        (BLARG.foo, 'foo'),
+                        (BLARG.fool, 'foo'),
+                        (BLARG.barr, 'bar'),
+                    },
+                )
+
+            def test_as_blanknode(self):
+                blarg = BlargDataclass(foo='bloo', bar='blip')
+                actual = dataclass_as_blanknode(blarg, {})
+                self.assertIsInstance(actual, frozenset)
+                self.assertEqual(actual, frozenset((
+                    (BLARG.foo, 'bloo'),
+                )))
