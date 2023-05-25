@@ -1,7 +1,7 @@
 [project]
 name = "gather"
 readme = "README.md"
-version = "0.2023.5"
+version = "0.2023.6"
 requires-python = ">=3.10"
 optional-dependencies = [
     "rdflib>=6.0.0",
