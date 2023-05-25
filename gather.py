@@ -1,16 +1,27 @@
-'''gather.py: a tiny toolkit for gathering information
+'''gather.py: a (decreasingly) tiny toolkit for gathering information
 
 mindset metaphor:
 1. name a gathering
 2. pose a question
 3. leaf a record
-'''
-__all__ = ('Text', 'Focus', 'IriNamespace', 'Gathering', 'Basket')
 
-# standard-library imports
+includes some type declarations to describe how this toolkit represents a
+particular subset of RDF concepts (https://www.w3.org/TR/rdf11-concepts/)
+using (mostly) immutable python primitives
+'''
+__all__ = (
+    'GatheringNorms',
+    'Gathering',
+    'Text',
+    'Focus',
+    'Namestory',
+    'IriNamespace',
+    'Infobasket',
+)
+
+# only built-in imports
 import contextlib
 import copy
-import dataclasses  # python 3.10+ (could NamedTuple for better support?)
 import datetime
 import functools
 import itertools
@@ -23,22 +34,42 @@ if __debug__:  # examples/tests thru-out, wrapped in `__debug__`
     import unittest
 
 
+class Text(typing.NamedTuple):
+    unicode_text: str
+    language_iris: frozenset[str]
+    # note: allow any IRI to identify a text language
+    # (if you wish to constrain to IETF language tags
+    # as https://www.rfc-editor.org/rfc/bcp/bcp47.txt
+    # use the defined IANA_LANGUAGE namespace, below)
+
+    @classmethod
+    def new(cls, unicode_text: str, language_iris):
+        # ensure frozen/hashable
+        return cls(
+            unicode_text=unicode_text,
+            language_iris=ensure_frozenset(language_iris),
+        )
+
+    def checksum_iri(self) -> str:
+        raise NotImplementedError('TODO')
+
+
 ###
-# here are some type declarations to describe how this toolkit implements a
-# particular subset of RDF concepts (https://www.w3.org/TR/rdf11-concepts/)
+# here are some type declarations to describe how this toolkit represents a
+# particular subset of RDF concepts [https://www.w3.org/TR/rdf11-concepts/]
 # using (mostly) immutable python primitives
 RdfSubject = str    # IRI (not a blank node)
 RdfPredicate = str  # IRI
 RdfObject = typing.Union[
-    str,             # IRI references as plain strings
-    'Text',          # language tags required for Text
-    int, float,      # use primitives for numeric data
-    datetime.date,   # use date and datetime built-ins
-    'RdfBlankNode',  # reduce blank nodes to objects
+    str,            # IRI references as plain strings
+    Text,           # language iris required for Text
+    int, float,     # use primitives for numeric data
+    datetime.date,  # use date and datetime built-ins
+    frozenset,      # blanknodes as frozenset[twople]
 ]
 RdfTriple = tuple[RdfSubject, RdfPredicate, RdfObject]
 RdfTwople = tuple[RdfPredicate, RdfObject]  # implicit subject
-RdfBlankNode = frozenset[RdfTwople]
+RdfBlanknode = frozenset[RdfTwople]
 
 # an RDF graph as a dictionary of dictionaries
 # note: these are the only mutable "Rdf" types
@@ -46,7 +77,22 @@ RdfTwopleDictionary = dict[RdfPredicate, set[RdfObject]]
 RdfDictionary = dict[RdfSubject, RdfTwopleDictionary]
 
 
-def freeze_twoples(twople_dict: RdfTwopleDictionary) -> RdfBlankNode:
+###
+# utility/helper functions for working with the above types
+
+def ensure_frozenset(something) -> frozenset:
+    if isinstance(something, frozenset):
+        return something
+    if isinstance(something, str):
+        return frozenset((something,))
+    if something is None:
+        return frozenset()
+    return frozenset(something)  # error if not iterable
+
+
+def freeze_blanknode(twople_dict: RdfTwopleDictionary) -> RdfBlanknode:
+    '''build a "blank node" frozenset of twoples (rdf triples without subjects)
+    '''
     return frozenset(
         (pred, obj)
         for pred, obj_set in twople_dict.items()
@@ -54,86 +100,167 @@ def freeze_twoples(twople_dict: RdfTwopleDictionary) -> RdfBlankNode:
     )
 
 
-def unfreeze_twoples(twoples: RdfBlankNode) -> RdfTwopleDictionary:
+def unfreeze_blanknode(blanknode: RdfBlanknode) -> RdfTwopleDictionary:
+    '''build a "twople dictionary" of RDF objects indexed by predicate
+
+    @param blanknode: frozenset of (str, obj) twoples
+    @returns: dict[str, set] built from blanknode twoples
+    '''
     twople_dict = {}
-    for pred, obj in twoples:
-        twople_dict.setdefault(pred, set()).add(obj)
+    for predicate_iri, obj in blanknode:
+        twople_dict.setdefault(predicate_iri, set()).add(obj)
     return twople_dict
 
 
-###
-# a "gatherer" function yields information about a given focus
-GathererYield = typing.Union[
-    RdfTriple,  # using the rdf triple as basic unit of information
-    RdfTwople,  # may omit subject (assumed iri of the given focus)
-    # may yield a tuple containing `None`; will silently discard it
-    tuple[
-        typing.Optional[RdfSubject],
-        typing.Optional[RdfPredicate],
-        typing.Optional[RdfObject],
-    ],
-    tuple[
-        typing.Optional[RdfPredicate],
-        typing.Optional[RdfObject],
-    ],
-]
-Gatherer = typing.Callable[['Focus'], typing.Iterable[GathererYield]]
-# when decorated, the yield is tidied into triples
-DecoratedGatherer = typing.Callable[['Focus'], typing.Iterable[RdfTriple]]
-
-
-@dataclasses.dataclass(frozen=True)
-class Text:
-    unicode_text: str
-    # note: allow any IRI to identify a text language
-    # (if you wish to constrain to IETF language tags
-    # at https://www.rfc-editor.org/rfc/bcp/bcp47.txt
-    # use the defined IANA_LANGUAGE namespace, below)
-    language_iri: str = dataclasses.field(kw_only=True)
-
-    def checksum_iri(self) -> str:
-        raise NotImplementedError('TODO')
-
-
-@dataclasses.dataclass(frozen=True)
-class Focus:
-    iri: str
-    type_iris: frozenset[str] = dataclasses.field(kw_only=True)
-
-    def __post_init__(self):
-        # ensure frozen/hashable
-        assert isinstance(self.iri, str)
-        if not isinstance(self.type_iris, frozenset):
-            # can initialize `type_iris` with str or any iterable
-            frozen_type_iris = (
-                frozenset((self.type_iris,))
-                if isinstance(self.type_iris, str)
-                else frozenset(self.type_iris)
-            )
-            # using object.__setattr__ because frozen dataclass
-            object.__setattr__(self, 'type_iris', frozen_type_iris)
-
-    def as_rdf_tripleset(self) -> typing.Iterable[RdfTriple]:
-        for type_iri in self.type_iris:
-            yield (self.iri, RDF.type, type_iri)
+def looks_like_rdf_dictionary(rdf_dictionary) -> bool:
+    if not isinstance(rdf_dictionary, dict):
+        return False
+    for subj, twople_dict in rdf_dictionary.items():
+        if not (isinstance(subj, str) and isinstance(twople_dict, dict)):
+            return False
+        for pred, obj_set in twople_dict.items():
+            if not (isinstance(pred, str) and isinstance(obj_set, set)):
+                return False
+            if not all(isinstance(obj, RdfObject) for obj in obj_set):
+                return False
+    return True
 
 
 if __debug__:
-    class TextExamples(unittest.TestCase):
+    class TestBlanknodeUtils(unittest.TestCase):
+        def test_ensure_frozenset(self):
+            for arg, expected in (
+                (None, frozenset()),
+                (set(), frozenset()),
+                (list(), frozenset()),
+                ('foo', frozenset(('foo',))),
+                (['foo', 'bar'], frozenset(('foo', 'bar'))),
+                (range(3), frozenset((0, 1, 2))),
+            ):
+                actual = ensure_frozenset(arg)
+                self.assertIsInstance(actual, frozenset)
+                self.assertEqual(actual, expected)
+            for arg in (
+                frozenset(),
+                frozenset('hello'),
+                frozenset(('hello',)),
+                frozenset((1, 2, 3)),
+            ):
+                self.assertIs(ensure_frozenset(arg), arg)
+
+        def test_freeze_blanknode(self):
+            for arg, expected in (
+                ({}, frozenset()),
+                ({
+                    BLARG.foo: {BLARG.fob},
+                    BLARG.blib: {27, 33},
+                    BLARG.nope: set(),
+                }, frozenset((
+                    (BLARG.foo, BLARG.fob),
+                    (BLARG.blib, 27),
+                    (BLARG.blib, 33),
+                ))),
+            ):
+                actual = freeze_blanknode(arg)
+                self.assertIsInstance(actual, frozenset)
+                self.assertEqual(actual, expected)
+
+        def test_unfreeze_blanknode(self):
+            self.assertEqual(
+                unfreeze_blanknode(frozenset()),
+                {},
+            )
+            self.assertEqual(
+                unfreeze_blanknode(frozenset((
+                    (BLARG.foo, BLARG.fob),
+                    (BLARG.blib, 27),
+                    (BLARG.blib, 33),
+                ))),
+                {
+                    BLARG.foo: {BLARG.fob},
+                    BLARG.blib: {27, 33},
+                },
+            )
+
+
+if __debug__:
+    class TestText(unittest.TestCase):
         def test_blurb(self):
-            my_blurb = Text(
+            my_blurb = Text.new(
                 'blurbl di blarbl ga',
-                language_iri=BLARG['my-language'],
+                language_iris={BLARG['my-language']},
             )
             self.assertIsInstance(my_blurb.unicode_text, str)
+            self.assertIsInstance(my_blurb.language_iris, frozenset)
             self.assertEqual(my_blurb.unicode_text, 'blurbl di blarbl ga')
-            self.assertEqual(str(my_blurb), 'blurbl di blarbl ga')
             self.assertEqual(
-                my_blurb.language_iri,
-                'https://blarg.example/my-language',
+                my_blurb.language_iris,
+                frozenset({'https://blarg.example/my-language'}),
             )
 
 
+class Focus(typing.NamedTuple):
+    iris: frozenset[str]  # synonymous persistent identifiers in IRI form
+    type_iris: frozenset[str]
+
+    @classmethod
+    def new(cls, iris=None, type_iris=None):
+        return cls(
+            iris=ensure_frozenset(iris),
+            type_iris=ensure_frozenset(type_iris),
+        )
+
+    def single_iri(self) -> str:
+        return next(iter(sorted(self.iris)))  # TODO: something better
+
+    def as_rdf_tripleset(self) -> typing.Iterable[RdfTriple]:
+        iri = self.single_iri()
+        for type_iri in self.type_iris:
+            yield (iri, RDF.type, type_iri)
+        for same_iri in self.iris:
+            if same_iri != iri:
+                yield (iri, OWL.sameAs, same_iri)
+
+
+###
+# a tuple of language-text with increasing length-cap
+# choose which name to use based on the space available
+# (don't worry, long Texts can/will be only referenced by checksum (...TODO))
+Namestory = tuple['Text', ...]
+
+
+def _namestory_sizes() -> typing.Iterable[int]:
+    '''infinite generator of increasing numbers
+
+    (why not fibonacci numbers starting at thirteen?)
+    '''
+    last_fib = 5
+    this_fib = 8
+    while True:
+        next_fib = this_fib + last_fib
+        last_fib = this_fib
+        this_fib = next_fib
+        yield this_fib
+
+
+def _is_valid_namestory(namestory: Namestory):
+    return (
+        isinstance(namestory, tuple)
+        and all(
+            (
+                isinstance(nametext, Text)
+                and (len(nametext.text) <= maxlen)
+            )
+            for nametext, maxlen in zip(
+                namestory,
+                _namestory_sizes(),
+            )
+        )
+    )
+
+
+###
+# for using IRIs without having to type out full IRIs
 class IriNamespace:
     '''IriNamespace: for building and using IRIs easily in python code
     (ideally IRLs ("L" for "Locator", an IRI which locates an internet
@@ -141,41 +268,83 @@ class IriNamespace:
     makes enough sense given context), but this toolkit does not check
     for locatorishness and treats any IRI like an IRN ("N" for "Name")
     '''
-    def __init__(self, iri: str):  # TODO: name/namestory
+    def __init__(
+        self, iri: str, *,
+        nameset: typing.Optional[set[str]] = None,
+        namestory: typing.Optional[Namestory] = None,
+    ):
+        # TODO: namespace metadata/definition
         if ':' not in iri:
             raise ValueError(
                 # trying out `Text` for translatable error messaging
-                Text(f'expected iri to have a ":" (got "{iri}")',
-                     language_iri=IANA_LANGUAGE.en),
+                Text.new(
+                    f'expected iri to have a ":" (got "{iri}")',
+                    language_iris={IANA_LANGUAGE.en},
+                )
             )
         # assume python's "private name mangling" will avoid conflicts
         self.__iri = iri
+        self.__namestory = namestory
+        self.__nameset = (
+            frozenset(nameset)
+            if nameset is not None
+            else None
+        )
 
     @classmethod
-    def namespace_name(cls, namespace: 'IriNamespace'):
-        return namespace.__name
+    def without_namespace(
+        cls, iri: str, *,
+        namespace: typing.Union[str, 'IriNamespace'],
+    ) -> str:
+        namespace_iri = (
+            namespace
+            if isinstance(namespace, str)
+            else namespace.__iri
+        )
+        if not iri.startswith(namespace_iri):
+            raise ValueError(f'"{iri}" does not start with "{namespace_iri}"')
+        return iri[len(namespace_iri):]  # the remainder after the namespace
 
-    @classmethod
-    def namespace_description(cls, namespace: 'IriNamespace'):
-        return namespace.__description
+    def __join_name(self, name: str) -> str:
+        if (self.__nameset is not None) and (name not in self.__nameset):
+            raise ValueError(
+                f'name "{name}" not in namespace "{self.__iri}"'
+                f' (allowed names: {self.__nameset})'
+            )
+        return ''.join((self.__iri, name))
 
-    @classmethod
-    def without_namespace(cls, iri: str, *, namespace: 'IriNamespace'):
-        if not iri.startswith(namespace.__iri):
-            raise ValueError(f'"{iri}" should start with "{namespace.__iri}"')
-        return iri[len(namespace.__iri):]
-
-    def __getitem__(self, attrname: str) -> str:
+    def __getitem__(self, name_or_slice) -> str:
         '''IriNamespace.__getitem__: build iri with `SQUARE['bracket']` syntax
+
+        use "slice" syntax to support variable namespaces within namespaces;
+        up to three parts separated by colons will be concatenated
+
+        Foo = IriNamespace('http://foo.example/')
+        FOO['blah/':'blum#':'blee'] => 'http://foo.example/blah/blum#blee'
         '''
-        return ''.join((self.__iri, attrname))
+        if isinstance(name_or_slice, slice):
+            name = ''.join(filter(None, (
+                name_or_slice.start,
+                name_or_slice.stop,
+                name_or_slice.step,
+            )))
+        else:
+            name = name_or_slice
+        return self.__join_name(name)
 
     def __getattr__(self, attrname: str) -> str:
         '''IriNamespace.__getattr__: build iri with `DOT.dot` syntax
-        '''
-        return self.__getitem__(attrname)
 
-    def __contains__(self, iri: str):
+        convenience for names that happen to fit python's attrname constraints
+        '''
+        return self.__join_name(attrname)
+
+    def __contains__(self, iri_or_namespace):
+        iri = (
+            iri_or_namespace.__iri
+            if isinstance(iri_or_namespace, IriNamespace)
+            else iri_or_namespace  # assume str
+        )
         return iri.startswith(self.__iri)
 
     def __str__(self):
@@ -188,40 +357,43 @@ class IriNamespace:
         return hash(self.__iri)
 
 
+###
+# some namespaces from open standards
 RDF = IriNamespace('http://www.w3.org/1999/02/22-rdf-syntax-ns#')
+RDFS = IriNamespace('http://www.w3.org/2000/01/rdf-schema#')
+OWL = IriNamespace('http://www.w3.org/2002/07/owl#', nameset={
+    'sameAs',
+})
 
 # `gather.Text` uses an IRI to identify language;
-# use IANA_LANGUAGE to express IETF language tags
+# here is a probably-reliable way to express IETF
+# language tags in IRI form
 IANA_LANGUAGE_REGISTRY_IRI = (
     'https://www.iana.org/assignments/language-subtag-registry#'
 )
 IANA_LANGUAGE = IriNamespace(
     f'{IANA_LANGUAGE_REGISTRY_IRI}#',
-    name=Text('language', language_iri=f'{IANA_LANGUAGE_REGISTRY_IRI}#en-US'),
-    description=Text((
-        'allow expressing a "language tag" (as required by RDF and'
-        ' defined by IETF ( https://www.ietf.org/rfc/bcp/bcp47.txt'
-        ' ) as an IRI, using a URL for a IANA Registry followed by'
-        ' "#" and the language tag "tag-SUBTAG"'
-    ), language_iri=f'{IANA_LANGUAGE_REGISTRY_IRI}#en-US'),
+    namestory=lambda: (
+        Text.new('lang', language_iris={IANA_LANGUAGE['en-US']}),
+        Text.new('language', language_iris={IANA_LANGUAGE['en-US']}),
+        Text.new('language tag', language_iris={IANA_LANGUAGE['en-US']}),
+        Text.new((
+            'a "language tag" (as used by RDF and defined by IETF'
+            ' ( https://www.ietf.org/rfc/bcp/bcp47.txt )) has the'
+            ' structure "tag-SUBTAG", and has no defined IRI form'
+            ' -- this toolkit uses a set of IRIs to identify text'
+            ' languages, and this URL of the IANA Language Subtag'
+            ' Registry as an IRI namespace (even tho the fragment'
+            ' does not identify an item in the registry, as "tag"'
+            ' and "SUBTAG" are defined separately)'
+        ), language_iris={IANA_LANGUAGE['en-US']}),
+    ),
 )
 
 if __debug__:
-    BLARG = IriNamespace(
-        'https://blarg.example/',
-        name=Text(
-            'blarg',
-            language_iris={IANA_LANGUAGE['en-US']},
-        ),
-        description={
-            Text(
-                'blargl blarg',
-                language_iris={'https://blarg.example/blargl'},
-            ),
-        },
-    )
-    _blarg_some_focus = Focus(BLARG.asome, type_iris=BLARG.SomeType)
-    _blarg_nother_focus = Focus(BLARG.another, type_iris=BLARG.AnotherType)
+    BLARG = IriNamespace('https://blarg.example/')
+    _blarg_some_focus = Focus.new(BLARG.asome, type_iris=BLARG.SomeType)
+    _blarg_nother_focus = Focus.new(BLARG.another, type_iris=BLARG.AnotherType)
 
     class ExampleIriNamespaceUsage(unittest.TestCase):
         def test___contains__(self):
@@ -232,14 +404,16 @@ if __debug__:
             self.assertNotIn('https://gralb.example/booboo', BLARG)
             self.assertNotIn('blip', BLARG)
             my_subvocab = IriNamespace(
-                BLARG['my-subvocab'],
-                name=Text(
-                    'my-subvocab',
-                    language_iri=IANA_LANGUAGE['en-US'],
-                ),
-                description=Text(
-                    'a namespace nested within the BLARG namespace',
-                    language_iris=IANA_LANGUAGE['en-US'],
+                BLARG['my-subvocab/'],
+                namestory=(
+                    Text.new(
+                        'my-subvocab',
+                        language_iris={IANA_LANGUAGE['en-US']},
+                    ),
+                    Text.new(
+                        'a namespace nested within the BLARG namespace',
+                        language_iris={IANA_LANGUAGE['en-US']},
+                    ),
                 ),
             )
             self.assertIn(my_subvocab, BLARG)
@@ -256,82 +430,107 @@ if __debug__:
                 my_subvocab['🦎'],
                 'https://blarg.example/my-subvocab/🦎',
             )
+            self.assertEqual(
+                my_subvocab['🦎':'🦎':'🦎'],
+                'https://blarg.example/my-subvocab/🦎🦎🦎',
+            )
+            self.assertEqual(
+                BLARG['my-subvocab/':'🦎🦎'],
+                my_subvocab['🦎🦎'],
+            )
+            self.assertEqual(
+                BLARG['my-subvocab/':'🦎🦎':'#blarp'],
+                my_subvocab['🦎🦎':'#blarp'],
+            )
 
 
-class Gathering:
-    '''Gathering: for gatherers to decorate themself by interest
-    '''
-    def __init__(self, gathering_iri: str):
-        self.iri = gathering_iri
-        # see `_add_gatherer` for how these gatherer dictionaries are used
-        self._by_predicate = {}
-        self._by_focustype = {}
-        self._for_any_predicate = set()
-        self._for_any_focustype = set()
+GathererYield = typing.Union[
+    RdfTriple,  # using the rdf triple as basic unit of information
+    RdfTwople,  # may omit subject (assumed iri of the given focus)
+    # may yield a Focus in the subject or object position, will get
+    # triples from Focus.iris and Focus.type_iris, and may initiate
+    # other gatherers' gathering.
+    # triples with `None` in any position are silently discarded
+    tuple[
+        typing.Union[RdfSubject, Focus, None],
+        typing.Union[RdfPredicate, None],
+        typing.Union[RdfObject, Focus, None],
+    ],
+    tuple[
+        typing.Union[RdfPredicate, None],
+        typing.Union[RdfObject, Focus, None],
+    ],
+]
 
-    def gatherer(self, *,
-                 predicate_iris=(),
-                 focustype_iris=(),
-                 ):
+Gatherer = typing.Callable[[Focus], typing.Iterable[GathererYield]]
+
+# when decorated, the yield is tidied into triples
+TripleGatherer = typing.Callable[[Focus], typing.Iterable[RdfTriple]]
+
+
+NormalizedPredicateShape = dict[RdfPredicate, 'PredicateShape']
+PredicateShape = typing.Union[
+    None,
+    str,
+    NormalizedPredicateShape,
+    typing.Iterable[str],
+]
+
+
+def normalize_predicate_shape(
+    predicate_shape: PredicateShape,
+) -> NormalizedPredicateShape:
+    if not predicate_shape:
+        return {}
+    if isinstance(predicate_shape, dict):
+        return predicate_shape  # do not normalize values
+    if isinstance(predicate_shape, str):
+        return {predicate_shape: None}
+    # assume Iterable[str]
+    return {
+        predicate_iri: None
+        for predicate_iri in predicate_shape
+    }
+
+
+###
+# to start gathering information, declare a `GatheringNorms` with
+# pre-defined vocabularies, then write a `Gatherer` function for
+# each iri in the vocab you want to gather about
+
+class GatheringNorms:
+    def __init__(
+        self, *,
+        namestory: Namestory,
+        vocabulary: RdfDictionary,
+        focustype_iris: frozenset[str],
+    ):
+        self.namestory = namestory
+        self.vocabulary = vocabulary
+        self.focustype_iris = ensure_frozenset(focustype_iris)
+        self.signup = GathererSignup()
+
+    def gatherer(self, *predicate_iris, focustype_iris=None):
         '''decorate gatherer functions with their iris of interest
         '''
-        def gatherer_decorator(gatherer_fn: Gatherer) -> DecoratedGatherer:
-            decorated_gatherer = self._decorated_gatherer(gatherer_fn)
-            self._add_gatherer(
-                decorated_gatherer,
+        def gatherer_decorator(gatherer_fn: Gatherer) -> TripleGatherer:
+            tidy_gatherer = self._tidy_gatherer(gatherer_fn)
+            self.signup.add_gatherer(
+                tidy_gatherer,
                 predicate_iris=predicate_iris,
-                focustype_iris=focustype_iris,
+                focustype_iris=(focustype_iris or ()),
             )
-            return decorated_gatherer
+            return tidy_gatherer
         return gatherer_decorator
 
-    def get_gatherers(self, *,
-                      focus: Focus,
-                      predicate_iris: typing.Iterable[str],
-                      ):
-        gatherer_set = None
-        for iris, gatherers_by_iri, gatherers_for_any_iri in (
-            (predicate_iris, self._by_predicate, self._for_any_predicate),
-            (focus.type_iris, self._by_focustype, self._for_any_focustype),
-        ):
-            gatherer_iter = itertools.chain(
-                *(
-                    gatherers_by_iri.get(iri, frozenset())
-                    for iri in iris
-                ),
-                gatherers_for_any_iri,
-            )
-            if gatherer_set is None:
-                gatherer_set = set(gatherer_iter)
-            else:
-                gatherer_set.intersection_update(gatherer_iter)
-        return gatherer_set
-
-    def _add_gatherer(self, gatherer, *,
-                      predicate_iris,
-                      focustype_iris,
-                      ):
-        for iris, gatherers_by_iri, gatherers_for_any_iri in (
-            (predicate_iris, self._by_predicate, self._for_any_predicate),
-            (focustype_iris, self._by_focustype, self._for_any_focustype),
-        ):
-            if not iris:
-                gatherers_for_any_iri.add(gatherer)
-            else:
-                for iri in iris:
-                    try:
-                        gatherers_by_iri[iri].add(gatherer)
-                    except KeyError:
-                        gatherers_by_iri[iri] = {gatherer}
-
-    def _decorated_gatherer(self, gatherer_fn: Gatherer) -> DecoratedGatherer:
+    def _tidy_gatherer(self, gatherer_fn: Gatherer) -> TripleGatherer:
         @functools.wraps(gatherer_fn)
-        def decorated_gatherer(focus: Focus):
+        def _gatherer(focus: Focus):
             for triple_or_twople in gatherer_fn(focus):
                 if len(triple_or_twople) == 3:
                     (subj, pred, obj) = triple_or_twople
                 elif len(triple_or_twople) == 2:
-                    subj = focus.iri
+                    subj = focus.single_iri()
                     (pred, obj) = triple_or_twople
                 else:
                     raise ValueError(
@@ -340,140 +539,28 @@ class Gathering:
                 triple = (subj, pred, obj)
                 if None not in triple:
                     yield triple
-        return decorated_gatherer
+        return _gatherer
 
 
-if __debug__:
-    BlargAthering = Gathering(BLARG.mygathering)
+class Gathering:
+    def __init__(self, norms: GatheringNorms):
+        self.norms = norms
+        self.cache = GatherCache(norms.signup)
 
-    @BlargAthering.gatherer(predicate_iris={BLARG.greeting})
-    def blargather_predicate(focus: Focus):
-        yield (BLARG.greeting, Text('kia ora', language_iri=IANA_LANGUAGE.mi))
-        yield (BLARG.greeting, Text('hola', language_iri=IANA_LANGUAGE.es))
-        yield (BLARG.greeting, Text('hello', language_iri=IANA_LANGUAGE.en))
-
-    def _blargather_iri_to_object(focus):
-        return {'nuuumber': len(focus.iri)}
-
-    @BlargAthering.gatherer(focustype_iris={BLARG.SomeType})
-    def blargather_focustype(focus: Focus):
-        assert BLARG.SomeType in focus.type_iris
-        my_blarg = _blargather_iri_to_object(focus)
-        yield (BLARG.number, my_blarg['nuuumber'])
-
-    class GatheringExample(unittest.TestCase):
-        def test_gathering_declaration(self):
-            self.assertEqual(BlargAthering.iri, BLARG.mygathering)
-            self.assertEqual(
-                BlargAthering.get_gatherers(_blarg_some_focus,
-                                            {BLARG.greeting}),
-                {blargather_predicate, blargather_focustype},
-            )
-            self.assertEqual(
-                BlargAthering.get_gatherers(_blarg_some_focus, {}),
-                {blargather_focustype},
-            )
-            self.assertEqual(
-                BlargAthering.get_gatherers(_blarg_nother_focus,
-                                            {BLARG.greeting}),
-                {blargather_predicate},
-            )
-            self.assertEqual(
-                BlargAthering.get_gatherers(_blarg_nother_focus, {}),
-                set(),
-            )
-
-
-class Basket:
-    __gathered: RdfDictionary
-
-    def __init__(self, gathering: Gathering, focus: Focus):
-        self.gathering = gathering
-        self.focus = focus
-        self.reset()
-
-    def reset(self):
-        self.__gathered = dict()
-        self.__gathers_done = set()
-
-    def pull(self, predicate_shape, *,
-             focus=None,
-             ) -> typing.Iterable[RdfObject]:
-        pull_focus = (focus or self.focus)
-        if isinstance(predicate_shape, str):
-            self.__maybe_gather(pull_focus, {predicate_shape})
-            return self.peek(predicate_shape, focus=pull_focus)
-        if isinstance(predicate_shape, dict):
-            self.__maybe_gather(pull_focus, predicate_shape.keys())
-            for predicate_iri, next_shape in predicate_shape.items():
-                if not next_shape:
-                    continue
-                for obj in self.peek(predicate_iri, focus=pull_focus):
-                    try:
-                        next_focus = self.get_focus_by_iri(obj)
-                    except ValueError:
-                        continue
-                    else:  # recursion:
-                        self.pull(next_shape, focus=next_focus)
-        else:  # assume iterable
-            self.__maybe_gather(set(predicate_shape), focus=pull_focus)
-            return self.peek(predicate_shape, focus=pull_focus)
-
-    def peek(self, predicate_iri, *, focus=None) -> typing.Iterable[RdfObject]:
-        if focus is None:
-            focus_iri = self.focus.iri
-        elif isinstance(focus, Focus):
-            focus_iri = focus.iri
-        elif isinstance(focus, str):
-            focus_iri = focus
-        else:
-            raise ValueError(
-                f'expected focus to be str or Focus or None (got {focus})'
-            )
-        yield from (
-            self.__gathered
-            .get(focus_iri, {})
-            .get(predicate_iri, set())
-        )
-
-    def add(self, subj, predicate, obj):
-        (
-            self.__gathered
-            .setdefault(subj, dict())
-            .setdefault(predicate, set())
-            .add(obj)
-        )
-
-    def get_focus_by_iri(self, iri):
-        try:
-            type_iris = self.__gathered[iri][RDF.type]
-        except KeyError:
-            raise ValueError(f'found no type for "{iri}"')
-        else:
-            return Focus(iri, type_iris=type_iris)
-
-    def __maybe_gather(self, focus, predicate_iris):
-        for gatherer in self.gathering.get_gatherers(focus, predicate_iris):
-            gatherkey = (gatherer, focus)
-            if gatherkey not in self.__gathers_done:
-                self.__gathers_done.add(gatherkey)
-                for (subj, pred, obj) in gatherer(focus):
-                    self.add(subj, pred, obj)
+    def infobasket(self, focus: Focus) -> 'Infobasket':
+        return Infobasket(gathering=self, focus=focus)
 
     def leaf__dictionary(self, *, pls_copy=False) -> RdfDictionary:
         return (
-            copy.deepcopy(self.__gathered)
+            copy.deepcopy(self.cache._triples_gathered)
             if pls_copy
-            else types.MappingProxyType(self.__gathered)
+            else types.MappingProxyType(self.cache._triples_gathered)
         )
 
     def leaf__tripleset(self) -> typing.Iterable[tuple]:
-        for subj, predicate_dict in self.__gathered.items():
-            for pred, obj_set in predicate_dict.items():
-                for obj in obj_set:
-                    yield (subj, pred, obj)
+        yield from self.cache.as_rdf_tripleset()
 
-    def leaf__html(self) -> str:
+    def leaf__html(self, *, focus) -> str:
         # TODO: microdata, css, language tags
         from xml.etree.ElementTree import TreeBuilder, tostring
         html_builder = TreeBuilder()
@@ -503,7 +590,7 @@ class Basket:
 
         def _obj(obj: RdfObject):
             if isinstance(obj, frozenset):
-                _twoples(unfreeze_twoples(obj))
+                _twoples(unfreeze_blanknode(obj))
             elif isinstance(obj, Text):
                 # TODO language tag
                 _leaf('span', text=str(obj))
@@ -515,10 +602,10 @@ class Basket:
                 _leaf('span', text=str(obj))
 
         # now use those helpers to build an <article>
-        # with all the info gathered thru this Basket
+        # with all the info gathered thru this Infobasket
         with _nest('article'):
             _leaf('h1', text=str(self.focus))  # TODO: shortened display name
-            for subj, predicate_dict in self.__gathered.items():
+            for subj, predicate_dict in self.cache._triples_gathered.items():
                 with _nest('section'):
                     _leaf('h2', text=subj)
                     _twoples(predicate_dict)
@@ -531,18 +618,14 @@ class Basket:
 
     def leaf__turtle(self) -> str:
         rdflib_graph = self.leaf__rdflib()
+        # TODO: sort blocks, focus first
         return rdflib_graph.serialize(format='turtle')
 
     def leaf__rdflib(self):
         try:
             import rdflib
         except ImportError:
-            raise GatherException(
-                Text(
-                    'Basket.leaf__rdflib depends on rdflib',
-                    language_iri=IANA_LANGUAGE.en,
-                ),
-            )
+            raise Exception('Infobasket.leaf__rdflib depends on rdflib')
 
         def _yield_rdflib(
             subj: RdfSubject,
@@ -554,23 +637,27 @@ class Basket:
             if isinstance(obj, str):
                 yield (rdflib_subj, rdflib_pred, rdflib.URIRef(obj))
             elif isinstance(obj, Text):
-                try:
-                    language_tag = IriNamespace.without_namespace(
-                        obj.language_iri,
-                        namespace=IANA_LANGUAGE,
-                    )
-                except ValueError:
-                    # datatype can be any IRI; link your own language
-                    literal_text = rdflib.Literal(
-                        obj.unicode_text,
-                        datatype=obj.language_iri,
-                    )
-                else:
-                    literal_text = rdflib.Literal(
-                        obj.unicode_text,
-                        language=language_tag,
-                    )
-                yield (rdflib_subj, rdflib_pred, literal_text)
+                assert len(obj.language_iris), (
+                    f'expected {obj} to have language_iris'
+                )
+                for language_iri in obj.language_iris:
+                    try:
+                        language_tag = IriNamespace.without_namespace(
+                            language_iri,
+                            namespace=IANA_LANGUAGE,
+                        )
+                    except ValueError:  # got a language iri
+                        # datatype can be any IRI; link your own language
+                        literal_text = rdflib.Literal(
+                            obj.unicode_text,
+                            datatype=obj.language_iri,
+                        )
+                    else:  # got a language tag
+                        literal_text = rdflib.Literal(
+                            obj.unicode_text,
+                            language=language_tag,
+                        )
+                    yield (rdflib_subj, rdflib_pred, literal_text)
             elif isinstance(obj, (int, float, datetime.date)):
                 yield (rdflib_subj, rdflib_pred, rdflib.Literal(obj))
             elif isinstance(obj, frozenset):
@@ -588,22 +675,289 @@ class Basket:
         return leafed_graph
 
 
+class GatherCache:
+    _triples_gathered: RdfDictionary
+    _gathers_done: set[tuple[Gatherer, Focus]]
+    _focus_set: set[Focus]
+
+    def __init__(self, gatherer_signup):
+        self._signup = gatherer_signup
+        self.reset()
+
+    def reset(self):
+        self._triples_gathered = dict()
+        self._gathers_done = set()
+        self._focus_set = set()
+
+    def as_rdf_tripleset(self) -> typing.Iterable[RdfTriple]:
+        for subj, predicate_dict in self._triples_gathered.items():
+            for pred, obj_set in predicate_dict.items():
+                for obj in obj_set:
+                    yield (subj, pred, obj)
+
+    def peek(
+        self, predicate_shape, *,
+        focus: typing.Union[Focus, str],
+    ) -> typing.Iterable[RdfObject]:
+        '''peek: yield information already gathered
+        '''
+        if isinstance(focus, Focus):
+            focus_iri = focus.single_iri()
+        elif isinstance(focus, str):
+            focus_iri = focus
+        else:
+            raise ValueError(
+                f'expected focus to be str or Focus or None (got {focus})'
+            )
+        predicate_dict = normalize_predicate_shape(predicate_shape)
+        for predicate_iri, next_shape in predicate_dict.items():
+            object_set = (
+                self._triples_gathered
+                .get(focus_iri, {})
+                .get(predicate_iri, set())
+            )
+            if next_shape:
+                for obj in object_set:
+                    if isinstance(obj, str):
+                        yield from self.peek(next_shape, focus=obj)
+            else:
+                yield from object_set
+
+    def pull(self, predicate_shape, *, focus: Focus):
+        '''pull: gather information (unless already gathered)
+        '''
+        predicate_dict = normalize_predicate_shape(predicate_shape)
+        self.__maybe_gather(focus, predicate_dict.keys())
+        for predicate_iri, next_shape in predicate_dict.items():
+            if next_shape:
+                for obj in self.peek(predicate_iri, focus=focus):
+                    try:
+                        next_focus = self.get_focus_by_iri(obj)
+                    except ValueError:
+                        continue
+                    else:  # recursion:
+                        self.pull(next_shape, focus=next_focus)
+
+    def get_focus_by_iri(self, iri):
+        try:
+            type_iris = self._triples_gathered[iri][RDF.type]
+        except KeyError:
+            raise ValueError(f'found no type for "{iri}"')
+        try:
+            same_iris = self._triples_gathered[iri][OWL.sameAs]
+        except KeyError:
+            iris = {iri}
+        else:
+            iris = {iri, *same_iris}
+        return Focus.new(iris=iris, type_iris=type_iris)
+
+    def __already_done(
+            self, gatherer: Gatherer, focus: Focus, *,
+            pls_mark_done=True,
+    ) -> bool:
+        gatherkey = (gatherer, focus)
+        is_done = (gatherkey in self._gathers_done)
+        if pls_mark_done and not is_done:
+            self._gathers_done.add(gatherkey)
+        return is_done
+
+    def __maybe_gather(self, focus, predicate_iris):
+        self.__add_focus(focus)
+        for gatherer in self._signup.get_gatherers(focus, predicate_iris):
+            if not self.__already_done(gatherer, focus, pls_mark_done=True):
+                for triple in gatherer(focus):
+                    self.__add_triple(triple)
+
+    def __add_focus(self, focus: Focus):
+        if focus not in self._focus_set:
+            self._focus_set.add(focus)
+            for triple in focus.as_rdf_tripleset():
+                self.__add_triple(triple)
+
+    def __add_triple(self, triple: RdfTriple):
+        (subj, pred, obj) = triple
+        (
+            self._triples_gathered
+            .setdefault(subj, dict())
+            .setdefault(pred, set())
+            .add(obj)
+        )
+
+
+class GathererSignup:
+    _by_predicate: dict[str, set[Gatherer]]
+    _by_focustype: dict[str, set[Gatherer]]
+    _for_any_predicate: set[Gatherer]
+    _for_any_focustype: set[Gatherer]
+
+    def __init__(self):
+        self._by_predicate = {}
+        self._by_focustype = {}
+        self._for_any_predicate = set()
+        self._for_any_focustype = set()
+
+    def add_gatherer(
+        self, gatherer: TripleGatherer, *,
+        predicate_iris,
+        focustype_iris,
+    ):
+        if predicate_iris:
+            for iri in predicate_iris:
+                (
+                    self._by_predicate
+                    .setdefault(iri, set())
+                    .add(gatherer)
+                )
+        else:
+            self._for_any_predicate.add(gatherer)
+        if focustype_iris:
+            for iri in focustype_iris:
+                (
+                    self._by_focustype
+                    .setdefault(iri, set())
+                    .add(gatherer)
+                )
+        else:
+            self._for_any_focustype.add(gatherer)
+        return gatherer
+
+    def get_gatherers(
+        self,
+        focus: Focus,
+        predicate_iris: typing.Iterable[str],
+    ):
+        gatherer_set = None
+        for iris, gatherers_by_iri, gatherers_for_any_iri in (
+            (predicate_iris, self._by_predicate, self._for_any_predicate),
+            (focus.type_iris, self._by_focustype, self._for_any_focustype),
+        ):
+            gatherer_iter = itertools.chain(
+                *(
+                    gatherers_by_iri.get(iri, frozenset())
+                    for iri in iris
+                ),
+                gatherers_for_any_iri,
+            )
+            if gatherer_set is None:
+                gatherer_set = set(gatherer_iter)
+            else:
+                gatherer_set.intersection_update(gatherer_iter)
+        return gatherer_set
+
+
 if __debug__:
-    class BasketExample(unittest.TestCase):
-        def test_blargbasket(self):
-            blargsket = Basket(BlargAthering, _blarg_some_focus)
+    BlargAtheringNorms = GatheringNorms(
+        namestory=(
+            Text.new(
+                'blarg',
+                language_iris={BLARG.myLanguage},
+            ),
+            Text.new(
+                'blargl blarg',
+                language_iris={BLARG.myLanguage},
+            ),
+            Text.new(
+                'a gathering called "blarg"',
+                language_iris={IANA_LANGUAGE['en-US']},
+            ),
+        ),
+        vocabulary={
+            BLARG.greeting: {
+                RDF.type: {RDFS.Property},
+            },
+        },
+        focustype_iris={
+            BLARG.SomeType,
+            BLARG.AnotherType,
+        },
+    )
+
+    @BlargAtheringNorms.gatherer(BLARG.greeting)
+    def blargather_greeting(focus: Focus):
+        yield (BLARG.greeting, Text.new(
+            'kia ora',
+            language_iris={IANA_LANGUAGE.mi},
+        ))
+        yield (BLARG.greeting, Text.new('hola', language_iris={IANA_LANGUAGE.es}))
+        yield (BLARG.greeting, Text.new('hello', language_iris={IANA_LANGUAGE.en}))
+
+    @BlargAtheringNorms.gatherer(focustype_iris={BLARG.SomeType})
+    def blargather_focustype(focus: Focus):
+        assert BLARG.SomeType in focus.type_iris
+        yield (BLARG.number, len(focus.iris))
+
+    class GatheringExample(unittest.TestCase):
+        def test_gathering_declaration(self):
             self.assertEqual(
-                set(blargsket.pull(BLARG.greeting)),
-                {
-                    Text('kia ora', language_iri=IANA_LANGUAGE.mi),
-                    Text('hola', language_iri=IANA_LANGUAGE.es),
-                    Text('hello', language_iri=IANA_LANGUAGE.en),
-                },
+                BlargAtheringNorms.signup.get_gatherers(
+                    _blarg_some_focus,
+                    {BLARG.greeting},
+                ),
+                {blargather_greeting, blargather_focustype},
             )
             self.assertEqual(
-                set(blargsket.pull(BLARG.unknownpredicate)),
+                BlargAtheringNorms.signup.get_gatherers(_blarg_some_focus, {}),
+                {blargather_focustype},
+            )
+            self.assertEqual(
+                BlargAtheringNorms.signup.get_gatherers(
+                    _blarg_nother_focus,
+                    {BLARG.greeting},
+                ),
+                {blargather_greeting},
+            )
+            self.assertEqual(
+                BlargAtheringNorms.signup.get_gatherers(
+                    _blarg_nother_focus,
+                    {},
+                ),
                 set(),
             )
 
 
+class Infobasket:
+    def __init__(self, gathering: Gathering, focus: Focus):
+        self.gathering = gathering
+        self.focus = focus
+        self.gathering.cache
 
+    def ask(
+        self,
+        predicate_shape: PredicateShape,
+    ) -> typing.Iterable[RdfObject]:
+        shape = normalize_predicate_shape(predicate_shape)
+        self.gathering.cache.pull(shape, focus=self.focus)
+        yield from self.gathering.cache.peek(shape, focus=self.focus)
+
+    def _ensure_focus(self, maybe_focus):
+        if maybe_focus is None:
+            return self.focus
+        if isinstance(maybe_focus, Focus):
+            return maybe_focus
+        if isinstance(maybe_focus, str):
+            return self.gathering.cache.get_focus_by_iri(maybe_focus)
+        raise ValueError(
+            f'_ensure_focus expected Focus, str, or None (got {maybe_focus})',
+        )
+
+    def __contains__(self, *args, **kwargs):
+        raise NotImplementedError  # prevent infinite loop from `foo in basket`
+
+
+if __debug__:
+    class BasketExample(unittest.TestCase):
+        def test_blargbasket(self):
+            blargAthering = Gathering(norms=BlargAtheringNorms)
+            blargsket = blargAthering.infobasket(_blarg_some_focus)
+            self.assertEqual(
+                set(blargsket.ask(BLARG.greeting)),
+                {
+                    Text.new('kia ora', language_iris={IANA_LANGUAGE.mi}),
+                    Text.new('hola', language_iris={IANA_LANGUAGE.es}),
+                    Text.new('hello', language_iris={IANA_LANGUAGE.en}),
+                },
+            )
+            self.assertEqual(
+                set(blargsket.ask(BLARG.unknownpredicate)),
+                set(),
+            )
