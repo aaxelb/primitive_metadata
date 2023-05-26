@@ -13,7 +13,7 @@
 
 a lil toolset for gathering metadata as rdf triples
 
-(for python 3.7+, rdflib 6+)
+(for python 3.7+)
 
 ## running unit tests
 `python3 -m unittest`
