@@ -153,7 +153,7 @@ def rdfobject_as_jsonld(rdfobject: RdfObject):
             _language_tag = next(
                 IriNamespace.without_namespace(_iri, namespace=IANA_LANGUAGE)
                 for _iri in rdfobject.language_iris
-                if _iri.startswith(IANA_LANGUAGE)
+                if _iri in IANA_LANGUAGE
             )
         except StopIteration:  # got a non-standard language iri
             return {
