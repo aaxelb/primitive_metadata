@@ -16,7 +16,6 @@ __all__ = (
     'Focus',
     'Namestory',
     'IriNamespace',
-    'Infobasket',
 )
 
 # only built-in imports (python 3.? (TODO: specificity))
@@ -148,7 +147,8 @@ def rdfobject_as_jsonld(rdfobject: RdfObject):
             ]
             for _pred, _objectset in unfreeze_blanknode(rdfobject).items()
         }
-    elif isinstance(rdfobject, Text):  # TODO: preserve language iris somehow
+    elif isinstance(rdfobject, Text):
+        # TODO: preserve multiple language iris somehow
         try:
             _language_tag = next(
                 IriNamespace.without_namespace(_iri, namespace=IANA_LANGUAGE)
@@ -602,8 +602,19 @@ class Gathering:
         self.norms = norms
         self.cache = GatherCache(norms.signup)
 
-    def infobasket(self, focus: Focus) -> 'Infobasket':
-        return Infobasket(gathering=self, focus=focus)
+    def ask(
+        self,
+        focus: typing.Union[str, Focus],
+        predicate_shape: PredicateShape,
+    ) -> typing.Iterable[RdfObject]:
+        _focus = (
+            self.cache.get_focus_by_iri(focus)
+            if isinstance(focus, str)
+            else focus
+        )
+        _shape = normalize_predicate_shape(predicate_shape)
+        self.cache.pull(_shape, focus=_focus)
+        yield from self.cache.peek(_shape, focus=_focus)
 
     def leaf__dictionary(self, *, pls_copy=False) -> RdfTripleDictionary:
         return (
@@ -657,7 +668,7 @@ class Gathering:
                 _leaf('span', text=str(obj))
 
         # now use those helpers to build an <article>
-        # with all the info gathered thru this Infobasket
+        # with all the info gathered in this gathering
         with _nest('article'):
             _leaf('h1', text=str(self.focus))  # TODO: shortened display name
             for subj, predicate_dict in self.cache._triples_gathered.items():
@@ -680,7 +691,7 @@ class Gathering:
         try:
             import rdflib
         except ImportError:
-            raise Exception('Infobasket.leaf__rdflib depends on rdflib')
+            raise Exception('leaf__rdflib depends on rdflib')
 
         def _yield_rdflib(
             subj: RdfSubject,
@@ -970,42 +981,12 @@ if __debug__:
             )
 
 
-class Infobasket:
-    def __init__(self, gathering: Gathering, focus: Focus):
-        self.gathering = gathering
-        self.focus = focus
-        self.gathering.cache
-
-    def ask(
-        self,
-        predicate_shape: PredicateShape,
-    ) -> typing.Iterable[RdfObject]:
-        shape = normalize_predicate_shape(predicate_shape)
-        self.gathering.cache.pull(shape, focus=self.focus)
-        yield from self.gathering.cache.peek(shape, focus=self.focus)
-
-    def _ensure_focus(self, maybe_focus):
-        if maybe_focus is None:
-            return self.focus
-        if isinstance(maybe_focus, Focus):
-            return maybe_focus
-        if isinstance(maybe_focus, str):
-            return self.gathering.cache.get_focus_by_iri(maybe_focus)
-        raise ValueError(
-            f'_ensure_focus expected Focus, str, or None (got {maybe_focus})',
-        )
-
-    def __contains__(self, *args, **kwargs):
-        raise NotImplementedError  # prevent infinite loop from `foo in basket`
-
-
 if __debug__:
-    class BasketExample(unittest.TestCase):
-        def test_blargbasket(self):
+    class AskExample(unittest.TestCase):
+        def test_blargask(self):
             blargAthering = Gathering(norms=BlargAtheringNorms)
-            blargsket = blargAthering.infobasket(_blarg_some_focus)
             self.assertEqual(
-                set(blargsket.ask(BLARG.greeting)),
+                set(blargAthering.ask(_blarg_some_focus, BLARG.greeting)),
                 {
                     Text.new('kia ora', language_iris={IANA_LANGUAGE.mi}),
                     Text.new('hola', language_iris={IANA_LANGUAGE.es}),
@@ -1013,7 +994,10 @@ if __debug__:
                 },
             )
             self.assertEqual(
-                set(blargsket.ask(BLARG.unknownpredicate)),
+                set(blargAthering.ask(
+                    _blarg_some_focus,
+                    BLARG.unknownpredicate,
+                )),
                 set(),
             )
 
