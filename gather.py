@@ -19,7 +19,7 @@ __all__ = (
     'Infobasket',
 )
 
-# only built-in imports
+# only built-in imports (python 3.? (TODO: specificity))
 import contextlib
 import copy
 import datetime
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 class Text(typing.NamedTuple):
     unicode_text: str
     language_iris: frozenset[str]
-    # note: allow any IRI to identify a text language
+    # note: allow any iri to identify a text language
     # (if you wish to constrain to IETF language tags
     # as https://www.rfc-editor.org/rfc/bcp/bcp47.txt
     # use the defined IANA_LANGUAGE namespace, below)
@@ -62,23 +62,23 @@ class Text(typing.NamedTuple):
 # here are some type declarations to describe how this toolkit represents a
 # particular subset of RDF concepts [https://www.w3.org/TR/rdf11-concepts/]
 # using (mostly) immutable python primitives
-RdfSubject = str    # IRI (not a blank node)
-RdfPredicate = str  # IRI
+RdfSubject = str    # iri (not a blank node)
+RdfPredicate = str  # iri
 RdfObject = typing.Union[
-    str,            # IRI references as plain strings
+    str,            # iri references as plain strings
     Text,           # language iris required for Text
     int, float,     # use primitives for numeric data
     datetime.date,  # use date and datetime built-ins
     frozenset,      # blanknodes as frozenset[twople]
 ]
-RdfTriple = tuple[RdfSubject, RdfPredicate, RdfObject]
 RdfTwople = tuple[RdfPredicate, RdfObject]  # implicit subject
+RdfTriple = tuple[RdfSubject, RdfPredicate, RdfObject]
 RdfBlanknode = frozenset[RdfTwople]
 
 # an RDF graph as a dictionary of dictionaries
 # note: these are the only mutable "Rdf" types
 RdfTwopleDictionary = dict[RdfPredicate, set[RdfObject]]
-RdfDictionary = dict[RdfSubject, RdfTwopleDictionary]
+RdfTripleDictionary = dict[RdfSubject, RdfTwopleDictionary]
 
 
 ###
@@ -128,6 +128,57 @@ def looks_like_rdf_dictionary(rdf_dictionary) -> bool:
             if not all(isinstance(obj, RdfObject) for obj in obj_set):
                 return False
     return True
+
+
+def tripledict_as_tripleset(
+    tripledict: RdfTripleDictionary
+) -> typing.Iterable[RdfTriple]:
+    for subj, twopledict in tripledict.items():
+        for pred, objset in twopledict.items():
+            for obj in objset:
+                yield (subj, pred, obj)
+
+
+def rdfobject_as_jsonld(rdfobject: RdfObject):
+    if isinstance(rdfobject, frozenset):
+        return {
+            _pred: [
+                rdfobject_as_jsonld(_obj)
+                for _obj in _objectset
+            ]
+            for _pred, _objectset in unfreeze_blanknode(rdfobject).items()
+        }
+    elif isinstance(rdfobject, Text):  # TODO: preserve language iris somehow
+        try:
+            _language_tag = next(
+                IriNamespace.without_namespace(_iri, namespace=IANA_LANGUAGE)
+                for _iri in rdfobject.language_iris
+                if _iri.startswith(IANA_LANGUAGE)
+            )
+        except StopIteration:  # got a non-standard language iri
+            return {
+                '@value': rdfobject.unicode_text,
+                '@type': next(iter(rdfobject.language_iris)),
+            }
+        else:  # got a language tag
+            return {
+                '@value': rdfobject.unicode_text,
+                '@language': _language_tag,
+            }
+    elif isinstance(rdfobject, str):
+        return {'@id': rdfobject}
+    elif isinstance(rdfobject, (float, int, datetime.date)):
+        return rdfobject
+
+
+def twopledict_as_jsonld(twopledict: RdfTwopleDictionary) -> dict:
+    return {
+        _pred: [
+            rdfobject_as_jsonld(_obj)
+            for _obj in _objset
+        ]
+        for _pred, _objset in twopledict.items()
+    }
 
 
 if __debug__:
@@ -204,7 +255,7 @@ if __debug__:
 
 
 class Focus(typing.NamedTuple):
-    iris: frozenset[str]  # synonymous persistent identifiers in IRI form
+    iris: frozenset[str]  # synonymous persistent identifiers in iri form
     type_iris: frozenset[str]
 
     @classmethod
@@ -264,7 +315,7 @@ def _is_valid_namestory(namestory: Namestory):
 
 
 ###
-# for using IRIs without having to type out full IRIs
+# for using iris without having to type out full iris
 class IriNamespace:
     '''IriNamespace: for building and using IRIs easily in python code
     (ideally IRLs ("L" for "Locator", an IRI which locates an internet
@@ -369,9 +420,9 @@ OWL = IriNamespace('http://www.w3.org/2002/07/owl#', nameset={
     'sameAs',
 })
 
-# `gather.Text` uses an IRI to identify language;
+# `gather.Text` uses an iri to identify language;
 # here is a probably-reliable way to express IETF
-# language tags in IRI form
+# language tags in iri form
 IANA_LANGUAGE_REGISTRY_IRI = (
     'https://www.iana.org/assignments/language-subtag-registry#'
 )
@@ -506,7 +557,7 @@ class GatheringNorms:
     def __init__(
         self, *,
         namestory: Namestory,
-        vocabulary: RdfDictionary,
+        vocabulary: RdfTripleDictionary,
         focustype_iris: frozenset[str],
     ):
         self.namestory = namestory
@@ -554,7 +605,7 @@ class Gathering:
     def infobasket(self, focus: Focus) -> 'Infobasket':
         return Infobasket(gathering=self, focus=focus)
 
-    def leaf__dictionary(self, *, pls_copy=False) -> RdfDictionary:
+    def leaf__dictionary(self, *, pls_copy=False) -> RdfTripleDictionary:
         return (
             copy.deepcopy(self.cache._triples_gathered)
             if pls_copy
@@ -562,7 +613,7 @@ class Gathering:
         )
 
     def leaf__tripleset(self) -> typing.Iterable[tuple]:
-        yield from self.cache.as_rdf_tripleset()
+        yield from tripledict_as_tripleset(self.cache._triples_gathered)
 
     def leaf__html(self, *, focus) -> str:
         # TODO: microdata, css, language tags
@@ -650,11 +701,11 @@ class Gathering:
                             language_iri,
                             namespace=IANA_LANGUAGE,
                         )
-                    except ValueError:  # got a language iri
-                        # datatype can be any IRI; link your own language
+                    except ValueError:  # got a non-standard language iri
+                        # datatype can be any iri; link your own language
                         literal_text = rdflib.Literal(
                             obj.unicode_text,
-                            datatype=obj.language_iri,
+                            datatype=language_iri,
                         )
                     else:  # got a language tag
                         literal_text = rdflib.Literal(
@@ -680,7 +731,7 @@ class Gathering:
 
 
 class GatherCache:
-    _triples_gathered: RdfDictionary
+    _triples_gathered: RdfTripleDictionary
     _gathers_done: set[tuple[Gatherer, Focus]]
     _focus_set: set[Focus]
 
@@ -692,12 +743,6 @@ class GatherCache:
         self._triples_gathered = dict()
         self._gathers_done = set()
         self._focus_set = set()
-
-    def as_rdf_tripleset(self) -> typing.Iterable[RdfTriple]:
-        for subj, predicate_dict in self._triples_gathered.items():
-            for pred, obj_set in predicate_dict.items():
-                for obj in obj_set:
-                    yield (subj, pred, obj)
 
     def peek(
         self, predicate_shape, *,
