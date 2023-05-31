@@ -748,8 +748,8 @@ class Gathering:
             else focus
         )
         _tidy_pathset = tidy_predicate_pathset(pathset)
-        self._cache.pull(_tidy_pathset, focus=_focus)
-        return self._cache.peek(_tidy_pathset, focus=_focus)
+        self._cache._pull(_tidy_pathset, focus=_focus)
+        return self._cache._peek(_tidy_pathset, focus=_focus)
 
     def leaf_a_record(self, *, pls_copy=False) -> RdfTripleDictionary:
         return (
@@ -780,6 +780,12 @@ class GatherCache:
     ) -> typing.Iterable[RdfObject]:
         '''peek: yield information already gathered
         '''
+        yield from self._peek(tidy_predicate_pathset(pathset), focus=focus)
+
+    def _peek(
+        self, tidy_pathset: PredicatePathSet, *,
+        focus: typing.Union[Focus, str],
+    ):
         if isinstance(focus, Focus):
             _focus_iri = focus.single_iri()
         elif isinstance(focus, str):
@@ -788,8 +794,7 @@ class GatherCache:
             raise ValueError(
                 f'expected focus to be str or Focus or None (got {focus})'
             )
-        _tidy_pathset = tidy_predicate_pathset(pathset)
-        for _predicate_iri, _next_pathset in _tidy_pathset.items():
+        for _predicate_iri, _next_pathset in tidy_pathset.items():
             _object_set = (
                 self.tripledict
                 .get(_focus_iri, {})
@@ -798,24 +803,46 @@ class GatherCache:
             if _next_pathset:
                 for _obj in _object_set:
                     if isinstance(_obj, str):
-                        yield from self.peek(_next_pathset, focus=_obj)
+                        yield from self._peek(_next_pathset, focus=_obj)
             else:
                 yield from _object_set
 
     def pull(self, pathset: MaybePredicatePathSet, *, focus: Focus):
         '''pull: gather information (unless already gathered)
         '''
-        _tidy_pathset = tidy_predicate_pathset(pathset)
-        self.__maybe_gather(focus, _tidy_pathset.keys())
-        for _predicate_iri, _next_pathset in _tidy_pathset.items():
+        self._pull(tidy_predicate_pathset(pathset), focus=focus)
+
+    def _pull(self, tidy_pathset: PredicatePathSet, *, focus: Focus):
+        self.__maybe_gather(focus, tidy_pathset.keys())
+        for _predicate_iri, _next_pathset in tidy_pathset.items():
             if _next_pathset:
                 for _obj in self.peek(_predicate_iri, focus=focus):
-                    try:
-                        _next_focus = self.get_focus_by_iri(_obj)
-                    except ValueError:
-                        continue
-                    else:  # recursion:
-                        self.pull(_next_pathset, focus=_next_focus)
+                    if isinstance(_obj, str):
+                        try:
+                            _next_focus = self.get_focus_by_iri(_obj)
+                        except ValueError:
+                            continue  # not a usable focus
+                        else:  # recursion:
+                            self._pull(_next_pathset, focus=_next_focus)
+                    elif isinstance(_obj, frozenset):
+                        # indirect recursion:
+                        self._pull_thru_blanknode(_obj, _next_pathset)
+
+    def _pull_thru_blanknode(
+        self,
+        blanknode: frozenset,
+        pathset: PredicatePathSet,
+    ):
+        for _pred, _obj in blanknode:
+            _next_pathset = pathset.get(_pred)
+            if _next_pathset:
+                if isinstance(_obj, frozenset):  # recursion:
+                    self._pull_thru_blanknode(_obj, _next_pathset)
+                elif isinstance(_obj, str):
+                    self._pull(
+                        _next_pathset,
+                        focus=self.get_focus_by_iri(_obj),
+                    )
 
     def get_focus_by_iri(self, iri: str):
         try:
