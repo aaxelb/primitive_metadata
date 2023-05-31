@@ -825,8 +825,16 @@ class GatherCache:
             for triple in focus.as_rdf_tripleset():
                 self.__add_triple(triple)
 
+    def __maybe_unwrap_focus(self, maybefocus: typing.Union[Focus, RdfObject]):
+        if isinstance(maybefocus, Focus):
+            self.__add_focus(maybefocus)
+            return maybefocus.single_iri()
+        return maybefocus
+
     def __add_triple(self, triple: RdfTriple):
         (_subj, _pred, _obj) = triple
+        _subj = self.__maybe_unwrap_focus(_subj)
+        _obj = self.__maybe_unwrap_focus(_obj)
         (
             self.tripledict
             .setdefault(_subj, dict())
@@ -916,6 +924,8 @@ if __debug__:
             BLARG.greeting: {
                 RDF.type: {RDFS.Property},
             },
+            BLARG.yoo: {
+            },
         },
         focustype_iris={
             BLARG.SomeType,
@@ -948,6 +958,13 @@ if __debug__:
         assert BLARG.SomeType in focus.type_iris
         yield (BLARG.number, len(focus.iris))
 
+    @BlargAtheringNorms.gatherer(BLARG.yoo)
+    def blargather_yoo(focus: Focus, *, hello):
+        if focus == _blarg_some_focus:
+            yield (BLARG.yoo, _blarg_nother_focus)
+        else:
+            yield (BLARG.yoo, _blarg_some_focus)
+
     class GatheringExample(unittest.TestCase):
         def test_gathering_declaration(self):
             self.assertEqual(
@@ -971,14 +988,18 @@ if __debug__:
             self.assertEqual(
                 BlargAtheringNorms.signup.get_gatherers(
                     _blarg_nother_focus,
+                    {BLARG.greeting, BLARG.yoo},
+                ),
+                {blargather_greeting, blargather_yoo},
+            )
+            self.assertEqual(
+                BlargAtheringNorms.signup.get_gatherers(
+                    _blarg_nother_focus,
                     {},
                 ),
                 set(),
             )
 
-
-if __debug__:
-    class AskExample(unittest.TestCase):
         def test_blargask(self):
             blargAthering = Gathering(norms=BlargAtheringNorms, hello='haha')
             self.assertEqual(
@@ -996,6 +1017,14 @@ if __debug__:
                     BLARG.unknownpredicate,
                 )),
                 set(),
+            )
+            self.assertEqual(
+                set(blargAthering.ask(_blarg_some_focus, BLARG.yoo)),
+                {_blarg_nother_focus.single_iri()},
+            )
+            self.assertEqual(
+                set(blargAthering.ask(_blarg_nother_focus, BLARG.yoo)),
+                {_blarg_some_focus.single_iri()},
             )
 
 try:
