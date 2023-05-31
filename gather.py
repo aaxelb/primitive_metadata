@@ -713,7 +713,7 @@ class Gathering:
         )
         _pathset = tidy_predicate_pathset(pathset)
         self._cache.pull(_pathset, focus=_focus)
-        yield from self._cache.peek(_pathset, focus=_focus)
+        return self._cache.peek(_pathset, focus=_focus)
 
     def leaf_a_record(self, *, pls_copy=False) -> RdfTripleDictionary:
         return (
