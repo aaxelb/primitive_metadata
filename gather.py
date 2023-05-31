@@ -36,26 +36,6 @@ if __debug__:  # examples/tests thru-out, wrapped in `__debug__`
 logger = logging.getLogger(__name__)
 
 
-class Text(typing.NamedTuple):
-    unicode_text: str
-    language_iris: frozenset[str]
-    # note: allow any iri to identify a text language
-    # (if you wish to constrain to IETF language tags
-    # as https://www.rfc-editor.org/rfc/bcp/bcp47.txt
-    # use the defined IANA_LANGUAGE namespace, below)
-
-    @classmethod
-    def new(cls, unicode_text: str, language_iris):
-        # ensure frozen/hashable
-        return cls(
-            unicode_text=unicode_text,
-            language_iris=ensure_frozenset(language_iris),
-        )
-
-    def checksum_iri(self) -> str:
-        raise NotImplementedError('TODO')
-
-
 ###
 # here are some type declarations to describe how this toolkit represents a
 # particular subset of RDF concepts [https://www.w3.org/TR/rdf11-concepts/]
@@ -64,7 +44,7 @@ RdfSubject = str    # iri (not a blank node)
 RdfPredicate = str  # iri
 RdfObject = typing.Union[
     str,            # iri references as plain strings
-    Text,           # language iris required for Text
+    'Text',         # language iris required for Text
     int, float,     # use primitives for numeric data
     datetime.date,  # use date and datetime built-ins
     frozenset,      # blanknodes as frozenset[twople]
@@ -112,6 +92,63 @@ def unfreeze_blanknode(blanknode: RdfBlanknode) -> RdfTwopleDictionary:
     for _pred, _obj in blanknode:
         _twopledict.setdefault(_pred, set()).add(_obj)
     return _twopledict
+
+
+if __debug__:
+    class TestBlanknodeUtils(unittest.TestCase):
+        def test_ensure_frozenset(self):
+            for arg, expected in (
+                (None, frozenset()),
+                (set(), frozenset()),
+                (list(), frozenset()),
+                ('foo', frozenset(('foo',))),
+                (['foo', 'bar'], frozenset(('foo', 'bar'))),
+                (range(3), frozenset((0, 1, 2))),
+            ):
+                actual = ensure_frozenset(arg)
+                self.assertIsInstance(actual, frozenset)
+                self.assertEqual(actual, expected)
+            for arg in (
+                frozenset(),
+                frozenset('hello'),
+                frozenset(('hello',)),
+                frozenset((1, 2, 3)),
+            ):
+                self.assertIs(ensure_frozenset(arg), arg)
+
+        def test_freeze_blanknode(self):
+            for arg, expected in (
+                ({}, frozenset()),
+                ({
+                    BLARG.foo: {BLARG.fob},
+                    BLARG.blib: {27, 33},
+                    BLARG.nope: set(),
+                }, frozenset((
+                    (BLARG.foo, BLARG.fob),
+                    (BLARG.blib, 27),
+                    (BLARG.blib, 33),
+                ))),
+            ):
+                actual = freeze_blanknode(arg)
+                self.assertIsInstance(actual, frozenset)
+                self.assertEqual(actual, expected)
+
+        def test_unfreeze_blanknode(self):
+            self.assertEqual(
+                unfreeze_blanknode(frozenset()),
+                {},
+            )
+            self.assertEqual(
+                unfreeze_blanknode(frozenset((
+                    (BLARG.foo, BLARG.fob),
+                    (BLARG.blib, 27),
+                    (BLARG.blib, 33),
+                ))),
+                {
+                    BLARG.foo: {BLARG.fob},
+                    BLARG.blib: {27, 33},
+                },
+            )
 
 
 def looks_like_rdf_dictionary(rdf_dictionary) -> bool:
@@ -288,9 +325,10 @@ def tripledict_as_rdflib(tripledict: RdfTripleDictionary):
             yield (_rdflib_subj, _rdflib_pred, rdflib.Literal(obj))
         elif isinstance(obj, frozenset):
             # may result in duplicates -- don't do shared blanknodes
-            _blanksubj = rdflib.BNode()
+            _blanknode = rdflib.BNode()
+            yield (_rdflib_subj, _rdflib_pred, _blanknode)
             for _blankpred, _blankobj in obj:
-                yield from _yield_rdflib(_blanksubj, _blankpred, _blankobj)
+                yield from _yield_rdflib(_blanknode, _blankpred, _blankobj)
         else:
             raise ValueError(f'should be RdfObject, got {obj}')
 
@@ -301,61 +339,24 @@ def tripledict_as_rdflib(tripledict: RdfTripleDictionary):
     return _leafed_graph
 
 
-if __debug__:
-    class TestBlanknodeUtils(unittest.TestCase):
-        def test_ensure_frozenset(self):
-            for arg, expected in (
-                (None, frozenset()),
-                (set(), frozenset()),
-                (list(), frozenset()),
-                ('foo', frozenset(('foo',))),
-                (['foo', 'bar'], frozenset(('foo', 'bar'))),
-                (range(3), frozenset((0, 1, 2))),
-            ):
-                actual = ensure_frozenset(arg)
-                self.assertIsInstance(actual, frozenset)
-                self.assertEqual(actual, expected)
-            for arg in (
-                frozenset(),
-                frozenset('hello'),
-                frozenset(('hello',)),
-                frozenset((1, 2, 3)),
-            ):
-                self.assertIs(ensure_frozenset(arg), arg)
+class Text(typing.NamedTuple):
+    unicode_text: str
+    language_iris: frozenset[str]
+    # note: allow any iri to identify a text language
+    # (if you wish to constrain to IETF language tags
+    # as https://www.rfc-editor.org/rfc/bcp/bcp47.txt
+    # use the defined IANA_LANGUAGE namespace, below)
 
-        def test_freeze_blanknode(self):
-            for arg, expected in (
-                ({}, frozenset()),
-                ({
-                    BLARG.foo: {BLARG.fob},
-                    BLARG.blib: {27, 33},
-                    BLARG.nope: set(),
-                }, frozenset((
-                    (BLARG.foo, BLARG.fob),
-                    (BLARG.blib, 27),
-                    (BLARG.blib, 33),
-                ))),
-            ):
-                actual = freeze_blanknode(arg)
-                self.assertIsInstance(actual, frozenset)
-                self.assertEqual(actual, expected)
+    @classmethod
+    def new(cls, unicode_text: str, language_iris):
+        # ensure frozen/hashable
+        return cls(
+            unicode_text=unicode_text,
+            language_iris=ensure_frozenset(language_iris),
+        )
 
-        def test_unfreeze_blanknode(self):
-            self.assertEqual(
-                unfreeze_blanknode(frozenset()),
-                {},
-            )
-            self.assertEqual(
-                unfreeze_blanknode(frozenset((
-                    (BLARG.foo, BLARG.fob),
-                    (BLARG.blib, 27),
-                    (BLARG.blib, 33),
-                ))),
-                {
-                    BLARG.foo: {BLARG.fob},
-                    BLARG.blib: {27, 33},
-                },
-            )
+    def checksum_iri(self) -> str:
+        raise NotImplementedError('TODO')
 
 
 if __debug__:
