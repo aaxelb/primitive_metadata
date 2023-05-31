@@ -262,6 +262,7 @@ def tripledict_as_html(tripledict: RdfTripleDictionary, *, focus) -> str:
     # with all the info gathered in this gathering
     with _nest_element('article'):
         _leaf_element('h1', text=str(focus))  # TODO: shortened display name
+        # TODO: start with focus
         for _subj, _twopledict in tripledict.items():
             with _nest_element('section'):
                 _leaf_element('h2', text=_subj)
@@ -291,14 +292,12 @@ def tripledict_as_rdflib(tripledict: RdfTripleDictionary):
 
     # a local helper
     def _yield_rdflib(
-        subj: RdfSubject,
-        pred: RdfPredicate,
+        rdflib_subj: rdflib.term.Node,
+        rdflib_pred: rdflib.term.Node,
         obj: RdfObject,
     ):
-        _rdflib_subj = rdflib.URIRef(subj)
-        _rdflib_pred = rdflib.URIRef(pred)
         if isinstance(obj, str):
-            yield (_rdflib_subj, _rdflib_pred, rdflib.URIRef(obj))
+            yield (rdflib_subj, rdflib_pred, rdflib.URIRef(obj))
         elif isinstance(obj, Text):
             assert len(obj.language_iris), (
                 f'expected {obj} to have language_iris'
@@ -318,25 +317,91 @@ def tripledict_as_rdflib(tripledict: RdfTripleDictionary):
                 else:  # got a language tag
                     _literal_text = rdflib.Literal(
                         obj.unicode_text,
-                        language=_language_tag,
+                        lang=_language_tag,
                     )
-                yield (_rdflib_subj, _rdflib_pred, _literal_text)
+                yield (rdflib_subj, rdflib_pred, _literal_text)
         elif isinstance(obj, (int, float, datetime.date)):
-            yield (_rdflib_subj, _rdflib_pred, rdflib.Literal(obj))
+            yield (rdflib_subj, rdflib_pred, rdflib.Literal(obj))
         elif isinstance(obj, frozenset):
             # may result in duplicates -- don't do shared blanknodes
             _blanknode = rdflib.BNode()
-            yield (_rdflib_subj, _rdflib_pred, _blanknode)
-            for _blankpred, _blankobj in obj:
-                yield from _yield_rdflib(_blanknode, _blankpred, _blankobj)
+            yield (rdflib_subj, rdflib_pred, _blanknode)
+            for _pred, _obj in obj:
+                yield from _yield_rdflib(
+                    _blanknode,
+                    rdflib.URIRef(_pred),
+                    _obj,
+                )
         else:
             raise ValueError(f'should be RdfObject, got {obj}')
 
-    _leafed_graph = rdflib.Graph()  # TODO: namespace prefixes?
+    _rdflib_graph = rdflib.Graph()  # TODO: namespace prefixes?
     for (_subj, _pred, _obj) in tripledict_as_tripleset(tripledict):
-        for _rdflib_triple in _yield_rdflib(_subj, _pred, _obj):
-            _leafed_graph.add(_rdflib_triple)
-    return _leafed_graph
+        for _rdflib_triple in _yield_rdflib(
+                rdflib.URIRef(_subj),
+                rdflib.URIRef(_pred),
+                _obj,
+        ):
+            _rdflib_graph.add(_rdflib_triple)
+    return _rdflib_graph
+
+
+if __debug__:
+    class TestRdflib(unittest.TestCase):
+        def test_as_rdflib(self):
+            try:
+                import rdflib
+                import rdflib.compare
+            except ImportError:
+                self.skipTest('cannot import rdflib')
+            _tripledict = {
+                BLARG.ha: {
+                    BLARG.pa: {
+                        BLARG.la,
+                        BLARG.xa,
+                        frozenset((
+                            (BLARG.a, BLARG.b),
+                            (BLARG.c, BLARG.d),
+                            (BLARG.e, frozenset((
+                                (BLARG.f, BLARG.g),
+                            ))),
+                        )),
+                    },
+                    BLARG.na: {
+                        BLARG.ja,
+                    },
+                },
+                BLARG.ya: {
+                    BLARG.ba: {
+                        Text.new('ha pa la xa', language_iris={BLARG.Dunno}),
+                        Text.new('naja yaba', language_iris={BLARG.Dunno}),
+                        Text.new('basic', language_iris={IANA_LANGUAGE.en}),
+                    },
+                }
+            }
+            _expected = rdflib.Graph()
+            _expected.parse(data=f'''
+                @prefix blarg: <{str(BLARG)}> .
+
+                blarg:ha
+                    blarg:pa blarg:la ,
+                             blarg:xa ,
+                             [
+                                blarg:a blarg:b ;
+                                blarg:c blarg:d ;
+                                blarg:e [ blarg:f blarg:g ] ;
+                             ] ;
+                    blarg:na blarg:ja .
+
+                blarg:ya blarg:ba "ha pa la xa"^^blarg:Dunno ,
+                                  "naja yaba"^^blarg:Dunno ,
+                                  "basic"@en .
+            ''', format='turtle')
+            _actual = tripledict_as_rdflib(_tripledict)
+            self.assertEqual(
+                rdflib.compare.to_isomorphic(_actual),
+                rdflib.compare.to_isomorphic(_expected),
+            )
 
 
 class Text(typing.NamedTuple):
