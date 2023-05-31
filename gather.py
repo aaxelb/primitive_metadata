@@ -658,11 +658,17 @@ class GatheringNorms:
         namestory: Namestory,
         vocabulary: RdfTripleDictionary,
         focustype_iris: frozenset[str],
+        gathering_kwargnames: typing.Optional[typing.Iterable[str]] = None,
     ):
         self.namestory = namestory
         self.vocabulary = vocabulary
         self.focustype_iris = ensure_frozenset(focustype_iris)
+        self.gathering_kwargnames = ensure_frozenset(gathering_kwargnames)
         self.signup = GathererSignup()
+
+    def assert_gathering_kwargnames(self, kwargnames: typing.Iterable[str]):
+        # TODO: better messaging
+        assert self.gathering_kwargnames == frozenset(kwargnames)
 
     def gatherer(self, *predicate_iris, focustype_iris=None):
         '''decorate gatherer functions with their iris of interest
@@ -679,8 +685,9 @@ class GatheringNorms:
 
     def _make_triple_gatherer(self, gatherer_fn: Gatherer) -> TripleGatherer:
         @functools.wraps(gatherer_fn)
-        def _triple_gatherer(focus: Focus):
-            for _triple_or_twople in gatherer_fn(focus):
+        def _triple_gatherer(focus: Focus, **kwargs):
+            self.assert_gathering_kwargnames(kwargs.keys())
+            for _triple_or_twople in gatherer_fn(focus, **kwargs):
                 if len(_triple_or_twople) == 3:
                     (_subj, _pred, _obj) = _triple_or_twople
                 elif len(_triple_or_twople) == 2:
@@ -697,9 +704,10 @@ class GatheringNorms:
 
 
 class Gathering:
-    def __init__(self, norms: GatheringNorms):
+    def __init__(self, norms: GatheringNorms, **gathering_kwargs):
+        norms.assert_gathering_kwargnames(gathering_kwargs.keys())
         self.norms = norms
-        self._cache = GatherCache(norms.signup)
+        self._cache = GatherCache(norms.signup, gathering_kwargs)
 
     def ask(
         self,
@@ -711,9 +719,9 @@ class Gathering:
             if isinstance(focus, str)
             else focus
         )
-        _pathset = tidy_predicate_pathset(pathset)
-        self._cache.pull(_pathset, focus=_focus)
-        return self._cache.peek(_pathset, focus=_focus)
+        _tidy_pathset = tidy_predicate_pathset(pathset)
+        self._cache.pull(_tidy_pathset, focus=_focus)
+        return self._cache.peek(_tidy_pathset, focus=_focus)
 
     def leaf_a_record(self, *, pls_copy=False) -> RdfTripleDictionary:
         return (
@@ -728,8 +736,9 @@ class GatherCache:
     _gathers_done: set[tuple[Gatherer, Focus]]
     _focus_set: set[Focus]
 
-    def __init__(self, gatherer_signup):
+    def __init__(self, gatherer_signup, gathering_kwargs):
         self._signup = gatherer_signup
+        self._gathering_kwargs = gathering_kwargs
         self.reset()
 
     def reset(self):
@@ -807,7 +816,7 @@ class GatherCache:
         self.__add_focus(focus)
         for gatherer in self._signup.get_gatherers(focus, predicate_iris):
             if not self.__already_done(gatherer, focus, pls_mark_done=True):
-                for triple in gatherer(focus):
+                for triple in gatherer(focus, **self._gathering_kwargs):
                     self.__add_triple(triple)
 
     def __add_focus(self, focus: Focus):
@@ -912,10 +921,11 @@ if __debug__:
             BLARG.SomeType,
             BLARG.AnotherType,
         },
+        gathering_kwargnames={'hello'},
     )
 
     @BlargAtheringNorms.gatherer(BLARG.greeting)
-    def blargather_greeting(focus: Focus):
+    def blargather_greeting(focus: Focus, *, hello):
         yield (BLARG.greeting, Text.new(
             'kia ora',
             language_iris={IANA_LANGUAGE.mi},
@@ -928,9 +938,13 @@ if __debug__:
             'hello',
             language_iris={IANA_LANGUAGE.en},
         ))
+        yield (BLARG.greeting, Text.new(
+            hello,
+            language_iris={BLARG.Dunno},
+        ))
 
     @BlargAtheringNorms.gatherer(focustype_iris={BLARG.SomeType})
-    def blargather_focustype(focus: Focus):
+    def blargather_focustype(focus: Focus, *, hello):
         assert BLARG.SomeType in focus.type_iris
         yield (BLARG.number, len(focus.iris))
 
@@ -966,13 +980,14 @@ if __debug__:
 if __debug__:
     class AskExample(unittest.TestCase):
         def test_blargask(self):
-            blargAthering = Gathering(norms=BlargAtheringNorms)
+            blargAthering = Gathering(norms=BlargAtheringNorms, hello='haha')
             self.assertEqual(
                 set(blargAthering.ask(_blarg_some_focus, BLARG.greeting)),
                 {
                     Text.new('kia ora', language_iris={IANA_LANGUAGE.mi}),
                     Text.new('hola', language_iris={IANA_LANGUAGE.es}),
                     Text.new('hello', language_iris={IANA_LANGUAGE.en}),
+                    Text.new('haha', language_iris={BLARG.Dunno}),
                 },
             )
             self.assertEqual(
