@@ -18,7 +18,6 @@ __all__ = (
 )
 
 # only built-in imports (python 3.? (TODO: specificity))
-import contextlib
 import copy
 import datetime
 import functools
@@ -174,11 +173,11 @@ def tripledict_as_tripleset(
                 yield (_subj, _pred, _obj)
 
 
-def rdfobject_as_jsonld(rdfobject: RdfObject):
+def rdfobject_as_jsonld(rdfobject: RdfObject, simple_context: dict[str, str]):
     if isinstance(rdfobject, frozenset):
         return {
-            _pred: [
-                rdfobject_as_jsonld(_obj)
+            (simple_context.get(_pred) or _pred): [
+                rdfobject_as_jsonld(_obj, simple_context)
                 for _obj in _objectset
             ]
             for _pred, _objectset in unfreeze_blanknode(rdfobject).items()
@@ -202,77 +201,22 @@ def rdfobject_as_jsonld(rdfobject: RdfObject):
                 '@language': _language_tag,
             }
     elif isinstance(rdfobject, str):
-        return {'@id': rdfobject}
+        return {'@id': simple_context.get(rdfobject) or rdfobject}
     elif isinstance(rdfobject, (float, int, datetime.date)):
         return rdfobject
 
 
-def twopledict_as_jsonld(twopledict: RdfTwopleDictionary) -> dict:
+def twopledict_as_jsonld(
+    twopledict: RdfTwopleDictionary,
+    simple_context: dict[str, str],
+) -> dict:
     return {
-        _pred: [
-            rdfobject_as_jsonld(_obj)
+        (simple_context.get(_pred) or _pred): [
+            rdfobject_as_jsonld(_obj, simple_context)
             for _obj in _objset
         ]
         for _pred, _objset in twopledict.items()
     }
-
-
-def tripledict_as_html(tripledict: RdfTripleDictionary, *, focus) -> str:
-    # TODO: microdata, css, language tags
-    from xml.etree.ElementTree import TreeBuilder, tostring
-    _html_builder = TreeBuilder()
-    # define some local helpers:
-
-    @contextlib.contextmanager
-    def _nest_element(tag_name, attrs=None):
-        _html_builder.start(tag_name, attrs or {})
-        yield
-        _html_builder.end(tag_name)
-
-    def _leaf_element(tag_name, *, text=None, attrs=None):
-        _html_builder.start(tag_name, attrs or {})
-        if text is not None:
-            _html_builder.data(text)
-        _html_builder.end(tag_name)
-
-    def _twoples_list(twoples: RdfTwopleDictionary, attrs=None):
-        with _nest_element('ul', (attrs or {})):
-            for _pred, _obj_set in twoples.items():
-                with _nest_element('li'):
-                    _leaf_element('span', text=_pred)  # TODO: <a href>
-                    with _nest_element('ul'):
-                        for _obj in _obj_set:
-                            with _nest_element('li'):
-                                _obj_element(_obj)
-
-    def _obj_element(obj: RdfObject):
-        if isinstance(obj, frozenset):
-            _twoples_list(unfreeze_blanknode(obj))
-        elif isinstance(obj, Text):
-            # TODO language tag
-            _leaf_element('span', text=str(obj))
-        elif isinstance(obj, str):
-            # TODO link to anchor on this page?
-            _leaf_element('a', text=obj)
-        elif isinstance(obj, (float, int, datetime.date)):
-            # TODO datatype?
-            _leaf_element('span', text=str(obj))
-
-    # now use those helpers to build an <article>
-    # with all the info gathered in this gathering
-    with _nest_element('article'):
-        _leaf_element('h1', text=str(focus))  # TODO: shortened display name
-        # TODO: start with focus
-        for _subj, _twopledict in tripledict.items():
-            with _nest_element('section'):
-                _leaf_element('h2', text=_subj)
-                _twoples_list(_twopledict)
-    # and serialize as str
-    return tostring(
-        _html_builder.close(),
-        encoding='unicode',
-        method='html',
-    )
 
 
 def tripledict_as_turtle(
