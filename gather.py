@@ -173,15 +173,17 @@ def tripledict_as_tripleset(
                 yield (_subj, _pred, _obj)
 
 
-def rdfobject_as_jsonld(rdfobject: RdfObject, simple_context: dict[str, str]):
+def rdfobject_as_jsonld(
+    rdfobject: RdfObject,
+    vocabulary: RdfTripleDictionary,
+    iri_to_shortlabel: dict[str, str],
+):
     if isinstance(rdfobject, frozenset):
-        return {
-            (simple_context.get(_pred) or _pred): [
-                rdfobject_as_jsonld(_obj, simple_context)
-                for _obj in _objectset
-            ]
-            for _pred, _objectset in unfreeze_blanknode(rdfobject).items()
-        }
+        return twopledict_as_jsonld(
+            unfreeze_blanknode(rdfobject),
+            vocabulary,
+            iri_to_shortlabel,
+        )
     elif isinstance(rdfobject, Text):
         # TODO: preserve multiple language iris somehow
         try:
@@ -201,22 +203,40 @@ def rdfobject_as_jsonld(rdfobject: RdfObject, simple_context: dict[str, str]):
                 '@language': _language_tag,
             }
     elif isinstance(rdfobject, str):
-        return {'@id': simple_context.get(rdfobject) or rdfobject}
+        return {'@id': iri_to_shortlabel.get(rdfobject) or rdfobject}
     elif isinstance(rdfobject, (float, int, datetime.date)):
         return rdfobject
 
 
 def twopledict_as_jsonld(
     twopledict: RdfTwopleDictionary,
-    simple_context: dict[str, str],
+    vocabulary: RdfTripleDictionary,
+    iri_to_shortlabel: dict[str, str],
 ) -> dict:
-    return {
-        (simple_context.get(_pred) or _pred): [
-            rdfobject_as_jsonld(_obj, simple_context)
-            for _obj in _objset
-        ]
-        for _pred, _objset in twopledict.items()
-    }
+    _jsonld = {}
+    for _pred, _objset in twopledict.items():
+        _key = iri_to_shortlabel.get(_pred) or _pred
+        _only_one_value = OWL.FunctionalProperty in (
+            vocabulary
+            .get(_pred, {})
+            .get(RDF.type, ())
+        )
+        if _only_one_value:
+            if len(_objset) > 1:
+                raise ValueError(
+                    f'expected at most one value for <{_pred}> (got {_objset})'
+                )
+            _jsonld[_key] = rdfobject_as_jsonld(
+                next(iter(_objset)),
+                vocabulary,
+                iri_to_shortlabel,
+            )
+        else:
+            _jsonld[_key] = [
+                rdfobject_as_jsonld(_obj, vocabulary, iri_to_shortlabel)
+                for _obj in _objset
+            ]
+    return _jsonld
 
 
 def tripledict_as_turtle(
@@ -516,9 +536,7 @@ class IriNamespace:
 # some namespaces from open standards
 RDF = IriNamespace('http://www.w3.org/1999/02/22-rdf-syntax-ns#')
 RDFS = IriNamespace('http://www.w3.org/2000/01/rdf-schema#')
-OWL = IriNamespace('http://www.w3.org/2002/07/owl#', nameset={
-    'sameAs',
-})
+OWL = IriNamespace('http://www.w3.org/2002/07/owl#')
 
 # `gather.Text` uses an iri to identify language;
 # here is a probably-reliable way to express IETF
