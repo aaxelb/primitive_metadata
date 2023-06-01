@@ -59,7 +59,7 @@ RdfTripleDictionary = dict[RdfSubject, RdfTwopleDictionary]
 
 
 ###
-# utility/helper functions for working with the above types
+# utility/helper functions for working with the "Rdf..." types above
 
 def ensure_frozenset(something) -> frozenset:
     if isinstance(something, frozenset):
@@ -76,20 +76,26 @@ def freeze_blanknode(twopledict: RdfTwopleDictionary) -> RdfBlanknode:
     '''
     return frozenset(
         (_pred, _obj)
-        for _pred, _obj_set in twopledict.items()
-        for _obj in _obj_set
+        for _pred, _objectset in twopledict.items()
+        for _obj in _objectset
     )
 
 
-def unfreeze_blanknode(blanknode: RdfBlanknode) -> RdfTwopleDictionary:
+def twopleset_as_twopledict(
+    twopleset: typing.Iterable[RdfTwople],
+) -> RdfTwopleDictionary:
     '''build a "twople dictionary" of RDF objects indexed by predicate
 
-    @param blanknode: frozenset of (str, obj) twoples
-    @returns: dict[str, set] built from blanknode twoples
+    @param twopleset: iterable of (str, obj) twoples
+    @returns: dict[str, set] built from twoples
     '''
     _twopledict = {}
-    for _pred, _obj in blanknode:
-        _twopledict.setdefault(_pred, set()).add(_obj)
+    for _pred, _obj in twopleset:
+        if _pred in _twopledict:
+            _objectset = _twopledict[_pred]
+        else:
+            _objectset = _twopledict[_pred] = set()
+        _objectset.add(_obj)
     return _twopledict
 
 
@@ -134,11 +140,11 @@ if __debug__:
 
         def test_unfreeze_blanknode(self):
             self.assertEqual(
-                unfreeze_blanknode(frozenset()),
+                twopleset_as_twopledict(frozenset()),
                 {},
             )
             self.assertEqual(
-                unfreeze_blanknode(frozenset((
+                twopleset_as_twopledict(frozenset((
                     (BLARG.foo, BLARG.fob),
                     (BLARG.blib, 27),
                     (BLARG.blib, 33),
@@ -156,10 +162,10 @@ def looks_like_rdf_dictionary(rdf_dictionary) -> bool:
     for _subj, _twopledict in rdf_dictionary.items():
         if not (isinstance(_subj, str) and isinstance(_twopledict, dict)):
             return False
-        for _pred, _obj_set in _twopledict.items():
-            if not (isinstance(_pred, str) and isinstance(_obj_set, set)):
+        for _pred, _objectset in _twopledict.items():
+            if not (isinstance(_pred, str) and isinstance(_objectset, set)):
                 return False
-            if not all(isinstance(_obj, RdfObject) for _obj in _obj_set):
+            if not all(isinstance(_obj, RdfObject) for _obj in _objectset):
                 return False
     return True
 
@@ -168,8 +174,8 @@ def tripledict_as_tripleset(
     tripledict: RdfTripleDictionary
 ) -> typing.Iterable[RdfTriple]:
     for _subj, _twopledict in tripledict.items():
-        for _pred, _obj_set in _twopledict.items():
-            for _obj in _obj_set:
+        for _pred, _objectset in _twopledict.items():
+            for _obj in _objectset:
                 yield (_subj, _pred, _obj)
 
 
@@ -180,7 +186,7 @@ def rdfobject_as_jsonld(
 ):
     if isinstance(rdfobject, frozenset):
         return twopledict_as_jsonld(
-            unfreeze_blanknode(rdfobject),
+            twopleset_as_twopledict(rdfobject),
             vocabulary,
             iri_to_shortlabel,
         )
@@ -214,7 +220,7 @@ def twopledict_as_jsonld(
     iri_to_shortlabel: dict[str, str],
 ) -> dict:
     _jsonld = {}
-    for _pred, _objset in twopledict.items():
+    for _pred, _objectset in twopledict.items():
         _key = iri_to_shortlabel.get(_pred) or _pred
         _only_one_value = OWL.FunctionalProperty in (
             vocabulary
@@ -222,19 +228,23 @@ def twopledict_as_jsonld(
             .get(RDF.type, ())
         )
         if _only_one_value:
-            if len(_objset) > 1:
-                raise ValueError(
-                    f'expected at most one value for <{_pred}> (got {_objset})'
+            if len(_objectset) > 1:
+                raise GatherException(
+                    label='jsonld--too-many-values',
+                    comment=(
+                        f'expected at most one value for <{_pred}>'
+                        f' (got {_objectset})'
+                    ),
                 )
             _jsonld[_key] = rdfobject_as_jsonld(
-                next(iter(_objset)),
+                next(iter(_objectset)),
                 vocabulary,
                 iri_to_shortlabel,
             )
         else:
             _jsonld[_key] = [
                 rdfobject_as_jsonld(_obj, vocabulary, iri_to_shortlabel)
-                for _obj in _objset
+                for _obj in _objectset
             ]
     return _jsonld
 
@@ -676,9 +686,10 @@ def tidy_predicate_pathset(
 
 
 ###
-# to start gathering information, declare a `GatheringNorms` with
-# pre-defined vocabularies, then write a `Gatherer` function for
-# each iri in the vocab you want to gather about
+# to start gathering information:
+# - declare a `GatheringNorms` with pre-defined vocabularies, names, etc.
+# - declare a `GatheringOrganizer` for each implementation of given norms
+# - write `Gatherer` functions that yield triples or twoples, given Focus
 
 class GatheringNorms:
     def __init__(
@@ -686,23 +697,33 @@ class GatheringNorms:
         namestory: Namestory,
         vocabulary: RdfTripleDictionary,
         focustype_iris: frozenset[str],
-        gathering_kwargnames: typing.Optional[typing.Iterable[str]] = None,
+        gatherer_kwargnames: typing.Optional[typing.Iterable[str]] = None,
     ):
         self.namestory = namestory
         self.vocabulary = vocabulary
         self.focustype_iris = ensure_frozenset(focustype_iris)
-        self.gathering_kwargnames = ensure_frozenset(gathering_kwargnames)
-        self.signup = GathererSignup()
+        self.gatherer_kwargnames = ensure_frozenset(gatherer_kwargnames)
 
-    def assert_gathering_kwargnames(self, kwargnames: typing.Iterable[str]):
-        # TODO: better messaging
-        assert self.gathering_kwargnames == frozenset(kwargnames)
+
+class GatheringOrganizer:
+    def __init__(self, namestory: Namestory, norms: GatheringNorms):
+        self.namestory = namestory
+        self.norms = norms
+        self.signup = _GathererSignup()
+
+    def new_gathering(self, gatherer_kwargs=None):
+        self.__validate_gatherer_kwargnames(gatherer_kwargs)
+        return Gathering(
+            norms=self.norms,
+            organizer=self,
+            gatherer_kwargs=(gatherer_kwargs or {}),
+        )
 
     def gatherer(self, *predicate_iris, focustype_iris=None):
         '''decorate gatherer functions with their iris of interest
         '''
         def _gatherer_decorator(gatherer_fn: Gatherer) -> TripleGatherer:
-            _triple_gatherer = self._make_triple_gatherer(gatherer_fn)
+            _triple_gatherer = self.__make_triple_gatherer(gatherer_fn)
             self.signup.add_gatherer(
                 _triple_gatherer,
                 predicate_iris=predicate_iris,
@@ -711,11 +732,11 @@ class GatheringNorms:
             return _triple_gatherer
         return _gatherer_decorator
 
-    def _make_triple_gatherer(self, gatherer_fn: Gatherer) -> TripleGatherer:
+    def __make_triple_gatherer(self, gatherer_fn: Gatherer) -> TripleGatherer:
         @functools.wraps(gatherer_fn)
-        def _triple_gatherer(focus: Focus, **kwargs):
-            self.assert_gathering_kwargnames(kwargs.keys())
-            for _triple_or_twople in gatherer_fn(focus, **kwargs):
+        def _triple_gatherer(focus: Focus, **gatherer_kwargs):
+            self.__validate_gatherer_kwargnames(gatherer_kwargs)
+            for _triple_or_twople in gatherer_fn(focus, **gatherer_kwargs):
                 if len(_triple_or_twople) == 3:
                     (_subj, _pred, _obj) = _triple_or_twople
                 elif len(_triple_or_twople) == 2:
@@ -730,163 +751,124 @@ class GatheringNorms:
                     yield triple
         return _triple_gatherer
 
+    def __validate_gatherer_kwargnames(self, gatherer_kwargs: dict):
+        _kwargnames = frozenset(gatherer_kwargs.keys())
+        if _kwargnames != self.norms.gatherer_kwargnames:
+            raise GatherException(
+                label='invalid-gatherer-kwargs',
+                comment=(
+                    f'expected {self.norms.gatherer_kwargnames},'
+                    f' got {_kwargnames}'
+                )
+            )
+
 
 class Gathering:
-    def __init__(self, norms: GatheringNorms, **gathering_kwargs):
-        norms.assert_gathering_kwargnames(gathering_kwargs.keys())
+    def __init__(
+        self,
+        norms: GatheringNorms,
+        organizer: GatheringOrganizer,
+        gatherer_kwargs: dict,
+    ):
         self.norms = norms
-        self._cache = GatherCache(norms.signup, gathering_kwargs)
+        self.organizer = organizer
+        self.gatherer_kwargs = gatherer_kwargs
+        self.cache = _GatherCache()
 
     def ask(
         self,
         focus: typing.Union[str, Focus],
-        pathset: MaybePredicatePathSet,
+        pathset: MaybePredicatePathSet,  # could be messy
     ) -> typing.Iterable[RdfObject]:
         _focus = (
-            self._cache.get_focus_by_iri(focus)
+            self.cache.get_focus_by_iri(focus)
             if isinstance(focus, str)
             else focus
         )
         _tidy_pathset = tidy_predicate_pathset(pathset)
-        self._cache._pull(_tidy_pathset, focus=_focus)
-        return self._cache._peek(_tidy_pathset, focus=_focus)
+        self.__gather_by_pathset(_tidy_pathset, focus=_focus)
+        return self.cache.peek(_tidy_pathset, focus=_focus)
 
     def leaf_a_record(self, *, pls_copy=False) -> RdfTripleDictionary:
         return (
-            copy.deepcopy(self._cache.tripledict)
+            copy.deepcopy(self.cache.tripledict)
             if pls_copy
-            else types.MappingProxyType(self._cache.tripledict)
+            else types.MappingProxyType(self.cache.tripledict)
         )
 
-
-class GatherCache:
-    tripledict: RdfTripleDictionary
-    _gathers_done: set[tuple[Gatherer, Focus]]
-    _focus_set: set[Focus]
-
-    def __init__(self, gatherer_signup, gathering_kwargs):
-        self._signup = gatherer_signup
-        self._gathering_kwargs = gathering_kwargs
-        self.reset()
-
-    def reset(self):
-        self.tripledict = dict()
-        self._gathers_done = set()
-        self._focus_set = set()
-
-    def peek(
-        self, pathset: MaybePredicatePathSet, *,
-        focus: typing.Union[Focus, str],
-    ) -> typing.Iterable[RdfObject]:
-        '''peek: yield information already gathered
+    def __gather_by_pathset(self, pathset: PredicatePathSet, *, focus: Focus):
+        '''gather information into the cache (unless already gathered)
         '''
-        yield from self._peek(tidy_predicate_pathset(pathset), focus=focus)
-
-    def _peek(
-        self, tidy_pathset: PredicatePathSet, *,
-        focus: typing.Union[Focus, str],
-    ):
-        if isinstance(focus, Focus):
-            _focus_iri = focus.single_iri()
-        elif isinstance(focus, str):
-            _focus_iri = focus
-        else:
-            raise ValueError(
-                f'expected focus to be str or Focus or None (got {focus})'
-            )
-        for _predicate_iri, _next_pathset in tidy_pathset.items():
-            _object_set = (
-                self.tripledict
-                .get(_focus_iri, {})
-                .get(_predicate_iri, set())
-            )
+        self.__maybe_gather(focus, pathset.keys())
+        for _predicate_iri, _next_pathset in pathset.items():
             if _next_pathset:
-                for _obj in _object_set:
-                    if isinstance(_obj, str):
-                        yield from self._peek(_next_pathset, focus=_obj)
+                for _obj in self.cache.peek(_predicate_iri, focus=focus):
+                    # indirect recursion:
+                    self.__gather_thru_object(_next_pathset, _obj)
+
+    def __gather_thru_object(self, pathset: PredicatePathSet, obj: RdfObject):
+        if isinstance(obj, str):  # iri
+            try:
+                _next_focus = self.cache.get_focus_by_iri(obj)
+            except GatherException:
+                return  # not a usable focus
             else:
-                yield from _object_set
+                self.__gather_by_pathset(pathset, focus=_next_focus)
+        elif isinstance(obj, frozenset):  # blank node
+            for _pred, _obj in obj:
+                _next_pathset = pathset.get(_pred)
+                if _next_pathset:
+                    self.__gather_thru_object(_next_pathset, _obj)
+        # otherwise, ignore
 
-    def pull(self, pathset: MaybePredicatePathSet, *, focus: Focus):
-        '''pull: gather information (unless already gathered)
-        '''
-        self._pull(tidy_predicate_pathset(pathset), focus=focus)
-
-    def _pull(self, tidy_pathset: PredicatePathSet, *, focus: Focus):
-        self.__maybe_gather(focus, tidy_pathset.keys())
-        for _predicate_iri, _next_pathset in tidy_pathset.items():
-            if _next_pathset:
-                for _obj in self.peek(_predicate_iri, focus=focus):
-                    if isinstance(_obj, str):
-                        try:
-                            _next_focus = self.get_focus_by_iri(_obj)
-                        except ValueError:
-                            continue  # not a usable focus
-                        else:  # recursion:
-                            self._pull(_next_pathset, focus=_next_focus)
-                    elif isinstance(_obj, frozenset):
-                        # indirect recursion:
-                        self._pull_thru_blanknode(_obj, _next_pathset)
-
-    def _pull_thru_blanknode(
+    def __maybe_gather(
         self,
-        blanknode: frozenset,
-        pathset: PredicatePathSet,
+        focus: Focus,
+        predicate_iris: typing.Iterable[str],
     ):
-        for _pred, _obj in blanknode:
-            _next_pathset = pathset.get(_pred)
-            if _next_pathset:
-                if isinstance(_obj, frozenset):  # recursion:
-                    self._pull_thru_blanknode(_obj, _next_pathset)
-                elif isinstance(_obj, str):
-                    self._pull(
-                        _next_pathset,
-                        focus=self.get_focus_by_iri(_obj),
-                    )
+        self.cache.add_focus(focus)
+        _signup = self.organizer.signup
+        for gatherer in _signup.get_gatherers(focus, predicate_iris):
+            if not self.cache.already_gathered(gatherer, focus):
+                for triple in gatherer(focus, **self.gatherer_kwargs):
+                    self.cache.add_triple(triple)
+
+
+class _GatherCache:
+    tripledict: RdfTripleDictionary
+    gathers_done: set[tuple[Gatherer, Focus]]
+    focus_set: set[Focus]
+
+    def __init__(self):
+        self.tripledict = dict()
+        self.gathers_done = set()
+        self.focus_set = set()
 
     def get_focus_by_iri(self, iri: str):
         try:
             _type_iris = self.tripledict[iri][RDF.type]
         except KeyError:
-            raise ValueError(f'found no type for "{iri}"')
+            raise GatherException(
+                label='cannot-get-focus',
+                comment=f'found no type for "{iri}"',
+            )
         try:
             _same_iris = self.tripledict[iri][OWL.sameAs]
         except KeyError:
             _iris = {iri}
         else:
             _iris = {iri, *_same_iris}
-        return Focus.new(iris=_iris, type_iris=_type_iris)
+        _focus = Focus.new(iris=_iris, type_iris=_type_iris)
+        self.add_focus(_focus)
+        return _focus
 
-    def __already_done(
-            self, gatherer: Gatherer, focus: Focus, *,
-            pls_mark_done=True,
-    ) -> bool:
-        gatherkey = (gatherer, focus)
-        is_done = (gatherkey in self._gathers_done)
-        if pls_mark_done and not is_done:
-            self._gathers_done.add(gatherkey)
-        return is_done
-
-    def __maybe_gather(self, focus, predicate_iris):
-        self.__add_focus(focus)
-        for gatherer in self._signup.get_gatherers(focus, predicate_iris):
-            if not self.__already_done(gatherer, focus, pls_mark_done=True):
-                for triple in gatherer(focus, **self._gathering_kwargs):
-                    self.__add_triple(triple)
-
-    def __add_focus(self, focus: Focus):
-        if focus not in self._focus_set:
-            self._focus_set.add(focus)
+    def add_focus(self, focus: Focus):
+        if focus not in self.focus_set:
+            self.focus_set.add(focus)
             for triple in focus.as_rdf_tripleset():
-                self.__add_triple(triple)
+                self.add_triple(triple)
 
-    def __maybe_unwrap_focus(self, maybefocus: typing.Union[Focus, RdfObject]):
-        if isinstance(maybefocus, Focus):
-            self.__add_focus(maybefocus)
-            return maybefocus.single_iri()
-        return maybefocus
-
-    def __add_triple(self, triple: RdfTriple):
+    def add_triple(self, triple: RdfTriple):
         (_subj, _pred, _obj) = triple
         _subj = self.__maybe_unwrap_focus(_subj)
         _obj = self.__maybe_unwrap_focus(_obj)
@@ -897,8 +879,56 @@ class GatherCache:
             .add(_obj)
         )
 
+    def peek(
+        self, pathset: PredicatePathSet, *,
+        focus: typing.Union[Focus, str],
+    ) -> typing.Iterable[RdfObject]:
+        '''peek: yield objects the given pathset leads to, from the given focus
+        '''
+        if isinstance(focus, Focus):
+            _focus_iri = focus.single_iri()
+        elif isinstance(focus, str):
+            _focus_iri = focus
+        else:
+            raise ValueError(
+                f'expected focus to be str or Focus or None (got {focus})'
+            )
+        for _predicate_iri, _next_pathset in pathset.items():
+            _object_set = (
+                self.tripledict
+                .get(_focus_iri, {})
+                .get(_predicate_iri, set())
+            )
+            if _next_pathset:
+                for _obj in _object_set:
+                    if isinstance(_obj, str):
+                        yield from self.peek(_next_pathset, focus=_obj)
+            else:
+                yield from _object_set
 
-class GathererSignup:
+    def already_gathered(
+        self, gatherer: Gatherer, focus: Focus, *,
+        pls_mark_done=True,
+    ) -> bool:
+        gatherkey = (gatherer, focus)
+        is_done = (gatherkey in self.gathers_done)
+        if pls_mark_done and not is_done:
+            self.gathers_done.add(gatherkey)
+        return is_done
+
+    def __maybe_unwrap_focus(self, maybefocus: typing.Union[Focus, RdfObject]):
+        if isinstance(maybefocus, Focus):
+            self.add_focus(maybefocus)
+            return maybefocus.single_iri()
+        return maybefocus
+
+
+if __debug__:
+    class TestGatherCache(unittest.TestCase):
+        pass  # TODO
+
+
+class _GathererSignup:
     _by_predicate: dict[str, set[Gatherer]]
     _by_focustype: dict[str, set[Gatherer]]
     _for_any_predicate: set[Gatherer]
@@ -962,14 +992,8 @@ class GathererSignup:
 if __debug__:
     BlargAtheringNorms = GatheringNorms(
         namestory=(
-            Text.new(
-                'blarg',
-                language_iris={BLARG.myLanguage},
-            ),
-            Text.new(
-                'blargl blarg',
-                language_iris={BLARG.myLanguage},
-            ),
+            Text.new('blarg', language_iris={BLARG.myLanguage}),
+            Text.new('blargl blarg', language_iris={BLARG.myLanguage}),
             Text.new(
                 'a gathering called "blarg"',
                 language_iris={IANA_LANGUAGE['en-US']},
@@ -986,10 +1010,17 @@ if __debug__:
             BLARG.SomeType,
             BLARG.AnotherType,
         },
-        gathering_kwargnames={'hello'},
+        gatherer_kwargnames={'hello'},
     )
 
-    @BlargAtheringNorms.gatherer(BLARG.greeting)
+    BlorgArganizer = GatheringOrganizer(
+        namestory=(
+            Text.new('blarg this way', language_iris={BLARG.myLanguage}),
+        ),
+        norms=BlargAtheringNorms,
+    )
+
+    @BlorgArganizer.gatherer(BLARG.greeting)
     def blargather_greeting(focus: Focus, *, hello):
         yield (BLARG.greeting, Text.new(
             'kia ora',
@@ -1008,12 +1039,12 @@ if __debug__:
             language_iris={BLARG.Dunno},
         ))
 
-    @BlargAtheringNorms.gatherer(focustype_iris={BLARG.SomeType})
+    @BlorgArganizer.gatherer(focustype_iris={BLARG.SomeType})
     def blargather_focustype(focus: Focus, *, hello):
         assert BLARG.SomeType in focus.type_iris
         yield (BLARG.number, len(focus.iris))
 
-    @BlargAtheringNorms.gatherer(BLARG.yoo)
+    @BlorgArganizer.gatherer(BLARG.yoo)
     def blargather_yoo(focus: Focus, *, hello):
         if focus == _blarg_some_focus:
             yield (BLARG.yoo, _blarg_nother_focus)
@@ -1023,32 +1054,32 @@ if __debug__:
     class GatheringExample(unittest.TestCase):
         def test_gathering_declaration(self):
             self.assertEqual(
-                BlargAtheringNorms.signup.get_gatherers(
+                BlorgArganizer.signup.get_gatherers(
                     _blarg_some_focus,
                     {BLARG.greeting},
                 ),
                 {blargather_greeting, blargather_focustype},
             )
             self.assertEqual(
-                BlargAtheringNorms.signup.get_gatherers(_blarg_some_focus, {}),
+                BlorgArganizer.signup.get_gatherers(_blarg_some_focus, {}),
                 {blargather_focustype},
             )
             self.assertEqual(
-                BlargAtheringNorms.signup.get_gatherers(
+                BlorgArganizer.signup.get_gatherers(
                     _blarg_nother_focus,
                     {BLARG.greeting},
                 ),
                 {blargather_greeting},
             )
             self.assertEqual(
-                BlargAtheringNorms.signup.get_gatherers(
+                BlorgArganizer.signup.get_gatherers(
                     _blarg_nother_focus,
                     {BLARG.greeting, BLARG.yoo},
                 ),
                 {blargather_greeting, blargather_yoo},
             )
             self.assertEqual(
-                BlargAtheringNorms.signup.get_gatherers(
+                BlorgArganizer.signup.get_gatherers(
                     _blarg_nother_focus,
                     {},
                 ),
@@ -1056,7 +1087,9 @@ if __debug__:
             )
 
         def test_blargask(self):
-            blargAthering = Gathering(norms=BlargAtheringNorms, hello='haha')
+            blargAthering = BlorgArganizer.new_gathering({
+                'hello': 'haha',
+            })
             self.assertEqual(
                 set(blargAthering.ask(_blarg_some_focus, BLARG.greeting)),
                 {
@@ -1082,6 +1115,17 @@ if __debug__:
                 {_blarg_some_focus.single_iri()},
             )
 
+
+###
+# utilities for working with dataclasses
+#
+# treat `dataclasses.Field.metadata` as twople-dictionary describing a property
+# (iri keys are safe enough against collision), with implicit `rdfs:label` from
+# `Field.name` (possible TODO: gather a `shacl:PropertyShape` for `Field.type`)
+#
+# may treat a dataclass instance as blanknode, twople-dictionary, or twople-set
+# (TODO: maybe build a Focus based on fields mapped to owl:sameAs and rdf:type)
+
 try:
     import dataclasses
 except ImportError:
@@ -1091,8 +1135,21 @@ except ImportError:
 else:
     def dataclass_as_twoples(
         dataclass_instance,
-        iri_by_fieldname: dict,
+        iri_by_fieldname=None,
     ) -> typing.Iterable[RdfTwople]:
+        '''express the given dataclass instance as RDF predicate-subject pairs
+
+        to be included, a field must have a name in `iri_by_fieldname` or have
+        a value for owl:sameAs (in full iri form) in `metadata`:
+        ```
+        @dataclasses.dataclass
+        class MyDataclass:
+            word: str = dataclasses.field(metadata={
+                OWL.sameAs: MY_IRI_NAMESPACE.myWord,
+            })
+            ignored: str
+        ```
+        '''
         for dataclass_field in dataclasses.fields(dataclass_instance):
             field_value = getattr(
                 dataclass_instance,
@@ -1100,13 +1157,25 @@ else:
                 None,
             )
             if field_value is not None:
-                try:
-                    yield (iri_by_fieldname[dataclass_field.name], field_value)
-                except KeyError:
-                    pass
+                if iri_by_fieldname is not None:
+                    try:
+                        yield (
+                            iri_by_fieldname[dataclass_field.name],
+                            field_value,
+                        )
+                    except KeyError:
+                        pass
                 field_iris = dataclass_field.metadata.get(OWL.sameAs, ())
                 for field_iri in field_iris:
                     yield (field_iri, field_value)
+
+    def dataclass_as_twopledict(
+        dataclass_instance,
+        iri_by_fieldname,
+    ) -> RdfTwopleDictionary:
+        return frozenset(
+            dataclass_as_twoples(dataclass_instance, iri_by_fieldname),
+        )
 
     def dataclass_as_blanknode(
         dataclass_instance,
@@ -1158,3 +1227,14 @@ else:
                 self.assertEqual(actual, frozenset((
                     (BLARG.foo, 'bloo'),
                 )))
+
+
+###
+# error handling
+# TODO:
+#   - use GatherException consistently
+#   - use Text for translatable comment
+#   - as twoples? rdfs:label, rdfs:comment
+class GatherException(Exception):
+    def __init__(self, *, label: str, comment: str):
+        super().__init__({'label': label, 'comment': comment})
