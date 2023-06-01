@@ -802,7 +802,7 @@ class Gathering:
         self.__maybe_gather(focus, pathset.keys())
         for _predicate_iri, _next_pathset in pathset.items():
             if _next_pathset:
-                for _obj in self.cache.peek(_predicate_iri, focus=focus):
+                for _obj in self.cache.peek({_predicate_iri: {}}, focus=focus):
                     # indirect recursion:
                     self.__gather_thru_object(_next_pathset, _obj)
 
