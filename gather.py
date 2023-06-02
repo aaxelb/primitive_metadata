@@ -713,18 +713,22 @@ class GatheringNorms:
         namestory: Namestory,
         vocabulary: RdfTripleDictionary,
         focustype_iris: frozenset[str],
-        gatherer_kwargnames: typing.Optional[typing.Iterable[str]] = None,
     ):
         self.namestory = namestory
         self.vocabulary = vocabulary
         self.focustype_iris = ensure_frozenset(focustype_iris)
-        self.gatherer_kwargnames = ensure_frozenset(gatherer_kwargnames)
 
 
 class GatheringOrganizer:
-    def __init__(self, namestory: Namestory, norms: GatheringNorms):
+    def __init__(
+        self,
+        namestory: Namestory,
+        norms: GatheringNorms,
+        gatherer_kwargnames: typing.Optional[typing.Iterable[str]] = None,
+    ):
         self.namestory = namestory
         self.norms = norms
+        self.gatherer_kwargnames = gatherer_kwargnames
         self.signup = _GathererSignup()
 
     def new_gathering(self, gatherer_kwargs=None):
@@ -769,11 +773,11 @@ class GatheringOrganizer:
 
     def __validate_gatherer_kwargnames(self, gatherer_kwargs: dict):
         _kwargnames = frozenset(gatherer_kwargs.keys())
-        if _kwargnames != self.norms.gatherer_kwargnames:
+        if _kwargnames != self.gatherer_kwargnames:
             raise GatherException(
                 label='invalid-gatherer-kwargs',
                 comment=(
-                    f'expected {self.norms.gatherer_kwargnames},'
+                    f'expected {self.gatherer_kwargnames},'
                     f' got {_kwargnames}'
                 )
             )
@@ -1026,7 +1030,6 @@ if __debug__:
             BLARG.SomeType,
             BLARG.AnotherType,
         },
-        gatherer_kwargnames={'hello'},
     )
 
     BlorgArganizer = GatheringOrganizer(
@@ -1034,6 +1037,7 @@ if __debug__:
             text('blarg this way', language_iris={BLARG.myLanguage}),
         ),
         norms=BlargAtheringNorms,
+        gatherer_kwargnames={'hello'},
     )
 
     @BlorgArganizer.gatherer(BLARG.greeting)
