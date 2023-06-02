@@ -193,6 +193,8 @@ def rdfobject_as_jsonld(
         )
     elif isinstance(rdfobject, Text):
         # TODO: preserve multiple language iris somehow
+        if not rdfobject.language_iris:
+            return rdfobject.unicode_text
         try:
             _language_tag = next(
                 IriNamespace.without_namespace(_iri, namespace=IANA_LANGUAGE)
