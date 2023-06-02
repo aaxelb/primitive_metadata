@@ -47,6 +47,7 @@ RdfObject = typing.Union[
     int, float,     # use primitives for numeric data
     datetime.date,  # use date and datetime built-ins
     frozenset,      # blanknodes as frozenset[twople]
+    tuple,          # ordered set as tuple[RdfObject]
 ]
 RdfTwople = tuple[RdfPredicate, RdfObject]  # implicit subject
 RdfTriple = tuple[RdfSubject, RdfPredicate, RdfObject]
@@ -212,6 +213,12 @@ def rdfobject_as_jsonld(
         return {'@id': iri_to_shortlabel.get(rdfobject) or rdfobject}
     elif isinstance(rdfobject, (float, int, datetime.date)):
         return rdfobject
+    elif isinstance(rdfobject, tuple):
+        return {'@list': [
+            rdfobject_as_jsonld(_obj, vocabulary, iri_to_shortlabel)
+            for _obj in rdfobject
+        ]}
+    raise ValueError(f'unrecognized RdfObject (got {rdfobject})')
 
 
 def twopledict_as_jsonld(
@@ -264,59 +271,62 @@ def tripledict_as_rdflib(tripledict: RdfTripleDictionary):
     except ImportError:
         raise Exception('tripledict_as_rdflib depends on rdflib')
 
+    _rdflib_graph = rdflib.Graph()  # TODO: namespace prefixes?
+
     # a local helper
-    def _yield_rdflib(
+    def _add_to_rdflib_graph(
         rdflib_subj: rdflib.term.Node,
         rdflib_pred: rdflib.term.Node,
         obj: RdfObject,
     ):
+        _rdflib_graph.add((rdflib_subj, rdflib_pred, _simple_rdflib_obj(obj)))
+
+    def _simple_rdflib_obj(obj: RdfObject):
         if isinstance(obj, str):
-            yield (rdflib_subj, rdflib_pred, rdflib.URIRef(obj))
-        elif isinstance(obj, Text):
-            assert len(obj.language_iris), (
-                f'expected {obj} to have language_iris'
-            )
-            for _language_iri in obj.language_iris:
-                try:
-                    _language_tag = IriNamespace.without_namespace(
-                        _language_iri,
-                        namespace=IANA_LANGUAGE,
-                    )
-                except ValueError:  # got a non-standard language iri
-                    # datatype can be any iri; link your own language
-                    _literal_text = rdflib.Literal(
-                        obj.unicode_text,
-                        datatype=_language_iri,
-                    )
-                else:  # got a language tag
-                    _literal_text = rdflib.Literal(
-                        obj.unicode_text,
-                        lang=_language_tag,
-                    )
-                yield (rdflib_subj, rdflib_pred, _literal_text)
+            return rdflib.URIRef(obj)
+        if isinstance(obj, Text):
+            if not obj.language_iris:
+                return rdflib.Literal(obj.unicode_text)
+            try:
+                _language_iri = next(
+                    _iri
+                    for _iri in obj.language_iris
+                    if _iri in IANA_LANGUAGE
+                )
+            except StopIteration:  # non-standard language iri?
+                # datatype can be any iri; link your own language
+                return rdflib.Literal(
+                    obj.unicode_text,
+                    datatype=next(iter(obj.language_iris)),
+                )
+            else:  # found standard language tag
+                _language_tag = IriNamespace.without_namespace(
+                    _language_iri,
+                    namespace=IANA_LANGUAGE,
+                )
+                return rdflib.Literal(
+                    obj.unicode_text,
+                    lang=_language_tag,
+                )
         elif isinstance(obj, (int, float, datetime.date)):
-            yield (rdflib_subj, rdflib_pred, rdflib.Literal(obj))
+            return rdflib.Literal(obj)
         elif isinstance(obj, frozenset):
             # may result in duplicates -- don't do shared blanknodes
             _blanknode = rdflib.BNode()
-            yield (rdflib_subj, rdflib_pred, _blanknode)
             for _pred, _obj in obj:
-                yield from _yield_rdflib(
-                    _blanknode,
-                    rdflib.URIRef(_pred),
-                    _obj,
-                )
-        else:
-            raise ValueError(f'should be RdfObject, got {obj}')
+                _add_to_rdflib_graph(_blanknode, rdflib.URIRef(_pred), _obj)
+            return _blanknode
+        elif isinstance(obj, tuple):
+            _list_bnode = rdflib.BNode()
+            rdflib.Seq(_rdflib_graph, _list_bnode, [
+                _simple_rdflib_obj(_obj)
+                for _obj in obj
+            ])
+            return _list_bnode
+        raise ValueError(f'expected RdfObject, got {obj}')
 
-    _rdflib_graph = rdflib.Graph()  # TODO: namespace prefixes?
     for (_subj, _pred, _obj) in tripledict_as_tripleset(tripledict):
-        for _rdflib_triple in _yield_rdflib(
-                rdflib.URIRef(_subj),
-                rdflib.URIRef(_pred),
-                _obj,
-        ):
-            _rdflib_graph.add(_rdflib_triple)
+        _add_to_rdflib_graph(rdflib.URIRef(_subj), rdflib.URIRef(_pred), _obj)
     return _rdflib_graph
 
 
@@ -496,7 +506,7 @@ class IriNamespace:
                 f'name "{name}" not in namespace "{self.__iri}"'
                 f' (allowed names: {self.__nameset})'
             )
-        return ''.join((self.__iri, name))
+        return ''.join((self.__iri, name))  # TODO: urlencode name
 
     def __getitem__(self, name_or_slice) -> str:
         '''IriNamespace.__getitem__: build iri with `SQUARE['bracket']` syntax
