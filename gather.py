@@ -455,7 +455,10 @@ def focus(iris=None, type_iris=None, gatherer_kwargset=None):
     if isinstance(gatherer_kwargset, frozenset):
         _gatherer_kwargset = gatherer_kwargset
     elif isinstance(gatherer_kwargset, dict):
-        _gatherer_kwargset = freeze_blanknode(gatherer_kwargset)
+        _gatherer_kwargset = frozenset(
+            (_kwargname, _kwargvalue)
+            for _kwargname, _kwargvalue in gatherer_kwargset.items()
+        )
     elif gatherer_kwargset is None:
         _gatherer_kwargset = frozenset()
     else:
