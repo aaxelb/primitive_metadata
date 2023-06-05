@@ -330,6 +330,8 @@ class Text(typing.NamedTuple):
 def text(unicode_text: str, *, language_iris):
     '''convenience wrapper for Text
     '''
+    if not unicode_text:
+        return None  # for easy omission
     return Text(
         unicode_text=unicode_text,
         language_iris=ensure_frozenset(language_iris),
