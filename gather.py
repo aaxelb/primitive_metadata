@@ -22,6 +22,7 @@ import copy
 import datetime
 import functools
 import itertools
+import json
 import logging
 import types
 import typing
@@ -187,6 +188,7 @@ def rdfobject_as_jsonld(
     rdfobject: RdfObject,
     vocabulary: RdfTripleDictionary,
     iri_to_shortlabel: dict[str, str],
+    expand_rdfjson_values: bool = False,
 ) -> dict:
     if isinstance(rdfobject, frozenset):
         return twopledict_as_jsonld(
@@ -198,6 +200,8 @@ def rdfobject_as_jsonld(
         # TODO: preserve multiple language iris somehow
         if not rdfobject.language_iris:
             return rdfobject.unicode_text
+        if expand_rdfjson_values and (RDF.JSON in rdfobject.language_iris):
+            return json.loads(rdfobject.unicode_text)
         try:
             _language_tag = next(
                 IriNamespace.without_namespace(_iri, namespace=IANA_LANGUAGE)
