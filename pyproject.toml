@@ -1,5 +1,5 @@
 [project]
 name = "gather"
 readme = "README.md"
-version = "0.2023.27"
+version = "0.2023.28"
 requires-python = ">=3.7"

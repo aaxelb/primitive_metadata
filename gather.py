@@ -187,7 +187,7 @@ def rdfobject_as_jsonld(
     rdfobject: RdfObject,
     vocabulary: RdfTripleDictionary,
     iri_to_shortlabel: dict[str, str],
-):
+) -> dict:
     if isinstance(rdfobject, frozenset):
         return twopledict_as_jsonld(
             twopleset_as_twopledict(rdfobject),
@@ -433,13 +433,8 @@ if __debug__:
 class Focus(typing.NamedTuple):
     iris: frozenset[str]  # synonymous persistent identifiers in iri form
     type_iris: frozenset[str]
-
-    @classmethod
-    def new(cls, iris=None, type_iris=None):
-        return cls(
-            iris=ensure_frozenset(iris),
-            type_iris=ensure_frozenset(type_iris),
-        )
+    # may override default gathering_kwargs from the Gathering:
+    gatherer_kwargset: frozenset[tuple[str, typing.Any]]
 
     def single_iri(self) -> str:
         return next(iter(sorted(self.iris)))  # TODO: something better
@@ -451,6 +446,31 @@ class Focus(typing.NamedTuple):
         for _same_iri in self.iris:
             if _same_iri != _iri:
                 yield (_iri, OWL.sameAs, _same_iri)
+        # TODO: gatherer_kwargset?
+
+
+def focus(iris=None, type_iris=None, gatherer_kwargset=None):
+    '''convenience wrapper for Focus
+    '''
+    if isinstance(gatherer_kwargset, frozenset):
+        _gatherer_kwargset = gatherer_kwargset
+    elif isinstance(gatherer_kwargset, dict):
+        _gatherer_kwargset = freeze_blanknode(gatherer_kwargset)
+    elif gatherer_kwargset is None:
+        _gatherer_kwargset = frozenset()
+    else:
+        raise GatherException(
+            label='focus-gatherer-kwargs',
+            comment=(
+                'gatherer_kwargset should be frozenset, dict, or None'
+                f' (got {gatherer_kwargset})'
+            ),
+        )
+    return Focus(
+        iris=ensure_frozenset(iris),
+        type_iris=ensure_frozenset(type_iris),
+        gatherer_kwargset=_gatherer_kwargset,
+    )
 
 
 ###
@@ -591,8 +611,8 @@ IANA_LANGUAGE = IriNamespace(
 
 if __debug__:
     BLARG = IriNamespace('https://blarg.example/')
-    _blarg_some_focus = Focus.new(BLARG.asome, type_iris=BLARG.SomeType)
-    _blarg_nother_focus = Focus.new(BLARG.another, type_iris=BLARG.AnotherType)
+    _blarg_some_focus = focus(BLARG.asome, type_iris=BLARG.SomeType)
+    _blarg_nother_focus = focus(BLARG.another, type_iris=BLARG.AnotherType)
 
     class ExampleIriNamespaceUsage(unittest.TestCase):
         def test___contains__(self):
@@ -732,7 +752,7 @@ class GatheringOrganizer:
         self.signup = _GathererSignup()
 
     def new_gathering(self, gatherer_kwargs=None):
-        self.__validate_gatherer_kwargnames(gatherer_kwargs)
+        self.validate_gatherer_kwargnames(gatherer_kwargs)
         return Gathering(
             norms=self.norms,
             organizer=self,
@@ -755,7 +775,7 @@ class GatheringOrganizer:
     def __make_triple_gatherer(self, gatherer_fn: Gatherer) -> TripleGatherer:
         @functools.wraps(gatherer_fn)
         def _triple_gatherer(focus: Focus, **gatherer_kwargs):
-            self.__validate_gatherer_kwargnames(gatherer_kwargs)
+            self.validate_gatherer_kwargnames(gatherer_kwargs)
             for _triple_or_twople in gatherer_fn(focus, **gatherer_kwargs):
                 if len(_triple_or_twople) == 3:
                     (_subj, _pred, _obj) = _triple_or_twople
@@ -771,7 +791,7 @@ class GatheringOrganizer:
                     yield triple
         return _triple_gatherer
 
-    def __validate_gatherer_kwargnames(self, gatherer_kwargs: dict):
+    def validate_gatherer_kwargnames(self, gatherer_kwargs: dict):
         _kwargnames = frozenset(gatherer_kwargs.keys())
         if _kwargnames != self.gatherer_kwargnames:
             raise GatherException(
@@ -853,6 +873,14 @@ class Gathering:
                 for triple in gatherer(focus, **self.gatherer_kwargs):
                     self.cache.add_triple(triple)
 
+    def __do_gather(self, gatherer, focus):
+        _gatherer_kwargs = {
+            **self.gatherer_kwargs,
+            **twopleset_as_twopledict(focus.gatherer_kwargset),
+        }
+        for triple in gatherer(focus, **_gatherer_kwargs):
+            self.cache.add_triple(triple)
+
 
 class _GatherCache:
     tripledict: RdfTripleDictionary
@@ -878,7 +906,7 @@ class _GatherCache:
             _iris = {iri}
         else:
             _iris = {iri, *_same_iris}
-        _focus = Focus.new(iris=_iris, type_iris=_type_iris)
+        _focus = focus(iris=_iris, type_iris=_type_iris)
         self.add_focus(_focus)
         return _focus
 
