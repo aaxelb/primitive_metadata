@@ -829,6 +829,22 @@ class Gathering:
         self.__gather_by_pathset(_tidy_pathset, focus=_focus)
         return self.cache.peek(_tidy_pathset, focus=_focus)
 
+    def ask_all_about(self, focus: typing.Union[str, Focus]):
+        _asked_focus = (
+            self.cache.get_focus_by_iri(focus)
+            if isinstance(focus, str)
+            else focus
+        )
+        _predicate_iris = self.organizer.signup.all_predicate_iris()
+        _focus_visited = set()
+        _focus_to_visit = {_asked_focus}
+        while _focus_to_visit:
+            _focus = _focus_to_visit.pop()
+            if _focus not in _focus_visited:
+                _focus_visited.add(_focus)
+                self.ask(_focus, _predicate_iris)
+                _focus_to_visit.update(self.cache.focus_set - _focus_visited)
+
     def leaf_a_record(self, *, pls_copy=False) -> RdfTripleDictionary:
         return (
             copy.deepcopy(self.cache.tripledict)
@@ -839,7 +855,7 @@ class Gathering:
     def __gather_by_pathset(self, pathset: PredicatePathSet, *, focus: Focus):
         '''gather information into the cache (unless already gathered)
         '''
-        self.__maybe_gather(focus, pathset.keys())
+        self.__gather_predicate_iris(focus, pathset.keys())
         for _predicate_iri, _next_pathset in pathset.items():
             if _next_pathset:
                 for _obj in self.cache.peek({_predicate_iri: {}}, focus=focus):
@@ -861,7 +877,7 @@ class Gathering:
                     self.__gather_thru_object(_next_pathset, _obj)
         # otherwise, ignore
 
-    def __maybe_gather(
+    def __gather_predicate_iris(
         self,
         focus: Focus,
         predicate_iris: typing.Iterable[str],
@@ -869,17 +885,16 @@ class Gathering:
         self.cache.add_focus(focus)
         _signup = self.organizer.signup
         for gatherer in _signup.get_gatherers(focus, predicate_iris):
-            if not self.cache.already_gathered(gatherer, focus):
-                for triple in gatherer(focus, **self.gatherer_kwargs):
-                    self.cache.add_triple(triple)
+            self.__maybe_gather(gatherer, focus)
 
-    def __do_gather(self, gatherer, focus):
-        _gatherer_kwargs = {
-            **self.gatherer_kwargs,
-            **twopleset_as_twopledict(focus.gatherer_kwargset),
-        }
-        for triple in gatherer(focus, **_gatherer_kwargs):
-            self.cache.add_triple(triple)
+    def __maybe_gather(self, gatherer, focus):
+        if not self.cache.already_gathered(gatherer, focus):
+            _gatherer_kwargs = {
+                **self.gatherer_kwargs,
+                **twopleset_as_twopledict(focus.gatherer_kwargset),
+            }
+            for triple in gatherer(focus, **_gatherer_kwargs):
+                self.cache.add_triple(triple)
 
 
 class _GatherCache:
@@ -1013,6 +1028,9 @@ class _GathererSignup:
             self._for_any_focustype.add(gatherer)
         return gatherer
 
+    def all_predicate_iris(self):
+        return frozenset(self._by_predicate.keys())
+
     def get_gatherers(
         self,
         focus: Focus,
@@ -1100,6 +1118,8 @@ if __debug__:
             yield (BLARG.yoo, _blarg_some_focus)
 
     class GatheringExample(unittest.TestCase):
+        maxDiff = None
+
         def test_gathering_declaration(self):
             self.assertEqual(
                 BlorgArganizer.signup.get_gatherers(
@@ -1162,6 +1182,36 @@ if __debug__:
                 set(blargAthering.ask(_blarg_nother_focus, BLARG.yoo)),
                 {_blarg_some_focus.single_iri()},
             )
+
+        def test_ask_all_about(self):
+            blargAthering = BlorgArganizer.new_gathering({
+                'hello': 'hoohoo',
+            })
+            blargAthering.ask_all_about(_blarg_some_focus)
+            _tripledict = blargAthering.leaf_a_record(pls_copy=True)
+            self.assertEqual(_tripledict, {
+                _blarg_some_focus.single_iri(): {
+                    RDF.type: {BLARG.SomeType},
+                    BLARG.greeting: {
+                        text('kia ora', language_iris={IANA_LANGUAGE.mi}),
+                        text('hola', language_iris={IANA_LANGUAGE.es}),
+                        text('hello', language_iris={IANA_LANGUAGE.en}),
+                        text('hoohoo', language_iris={BLARG.Dunno}),
+                    },
+                    BLARG.yoo: {_blarg_nother_focus.single_iri()},
+                    BLARG.number: {1},
+                },
+                _blarg_nother_focus.single_iri(): {
+                    RDF.type: {BLARG.AnotherType},
+                    BLARG.greeting: {
+                        text('kia ora', language_iris={IANA_LANGUAGE.mi}),
+                        text('hola', language_iris={IANA_LANGUAGE.es}),
+                        text('hello', language_iris={IANA_LANGUAGE.en}),
+                        text('hoohoo', language_iris={BLARG.Dunno}),
+                    },
+                    BLARG.yoo: {_blarg_some_focus.single_iri()},
+                },
+            })
 
 
 ###
