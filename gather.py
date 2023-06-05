@@ -22,7 +22,6 @@ import copy
 import datetime
 import functools
 import itertools
-import json
 import logging
 import types
 import typing
@@ -182,99 +181,6 @@ def tripledict_as_tripleset(
         for _pred, _objectset in _twopledict.items():
             for _obj in _objectset:
                 yield (_subj, _pred, _obj)
-
-
-def rdfobject_as_jsonld(
-    rdfobject: RdfObject,
-    vocabulary: RdfTripleDictionary,
-    iri_to_shortlabel: dict[str, str],
-    expand_rdfjson_values: bool = False,
-) -> dict:
-    if isinstance(rdfobject, frozenset):
-        return twopledict_as_jsonld(
-            twopleset_as_twopledict(rdfobject),
-            vocabulary,
-            iri_to_shortlabel,
-        )
-    elif isinstance(rdfobject, Text):
-        # TODO: preserve multiple language iris somehow
-        if not rdfobject.language_iris:
-            return rdfobject.unicode_text
-        if expand_rdfjson_values and (RDF.JSON in rdfobject.language_iris):
-            return json.loads(rdfobject.unicode_text)
-        try:
-            _language_tag = next(
-                IriNamespace.without_namespace(_iri, namespace=IANA_LANGUAGE)
-                for _iri in rdfobject.language_iris
-                if _iri in IANA_LANGUAGE
-            )
-        except StopIteration:  # got a non-standard language iri
-            return {
-                '@value': rdfobject.unicode_text,
-                '@type': next(iter(rdfobject.language_iris)),
-            }
-        else:  # got a language tag
-            return {
-                '@value': rdfobject.unicode_text,
-                '@language': _language_tag,
-            }
-    elif isinstance(rdfobject, str):
-        return {'@id': iri_to_shortlabel.get(rdfobject) or rdfobject}
-    elif isinstance(rdfobject, (float, int, datetime.date)):
-        return rdfobject
-    elif isinstance(rdfobject, tuple):
-        return {'@list': [
-            rdfobject_as_jsonld(
-                _obj,
-                vocabulary,
-                iri_to_shortlabel,
-                expand_rdfjson_values,
-            )
-            for _obj in rdfobject
-        ]}
-    raise ValueError(f'unrecognized RdfObject (got {rdfobject})')
-
-
-def twopledict_as_jsonld(
-    twopledict: RdfTwopleDictionary,
-    vocabulary: RdfTripleDictionary,
-    iri_to_shortlabel: dict[str, str],
-    expand_rdfjson_values: bool = False
-) -> dict:
-    _jsonld = {}
-    for _pred, _objectset in twopledict.items():
-        _key = iri_to_shortlabel.get(_pred) or _pred
-        _only_one_value = OWL.FunctionalProperty in (
-            vocabulary
-            .get(_pred, {})
-            .get(RDF.type, ())
-        )
-        if _only_one_value:
-            if len(_objectset) > 1:
-                raise GatherException(
-                    label='jsonld--too-many-values',
-                    comment=(
-                        f'expected at most one value for <{_pred}>'
-                        f' (got {_objectset})'
-                    ),
-                )
-            _jsonld[_key] = rdfobject_as_jsonld(
-                next(iter(_objectset)),
-                vocabulary,
-                iri_to_shortlabel,
-                expand_rdfjson_values,
-            )
-        else:
-            _jsonld[_key] = [
-                rdfobject_as_jsonld(
-                    _obj,
-                    vocabulary,
-                    iri_to_shortlabel,
-                    expand_rdfjson_values,
-                )
-                for _obj in _objectset
-            ]
-    return _jsonld
 
 
 def tripledict_as_turtle(
