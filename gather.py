@@ -224,7 +224,12 @@ def rdfobject_as_jsonld(
         return rdfobject
     elif isinstance(rdfobject, tuple):
         return {'@list': [
-            rdfobject_as_jsonld(_obj, vocabulary, iri_to_shortlabel)
+            rdfobject_as_jsonld(
+                _obj,
+                vocabulary,
+                iri_to_shortlabel,
+                expand_rdfjson_values,
+            )
             for _obj in rdfobject
         ]}
     raise ValueError(f'unrecognized RdfObject (got {rdfobject})')
@@ -234,6 +239,7 @@ def twopledict_as_jsonld(
     twopledict: RdfTwopleDictionary,
     vocabulary: RdfTripleDictionary,
     iri_to_shortlabel: dict[str, str],
+    expand_rdfjson_values: bool = False
 ) -> dict:
     _jsonld = {}
     for _pred, _objectset in twopledict.items():
@@ -256,10 +262,16 @@ def twopledict_as_jsonld(
                 next(iter(_objectset)),
                 vocabulary,
                 iri_to_shortlabel,
+                expand_rdfjson_values,
             )
         else:
             _jsonld[_key] = [
-                rdfobject_as_jsonld(_obj, vocabulary, iri_to_shortlabel)
+                rdfobject_as_jsonld(
+                    _obj,
+                    vocabulary,
+                    iri_to_shortlabel,
+                    expand_rdfjson_values,
+                )
                 for _obj in _objectset
             ]
     return _jsonld
