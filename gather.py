@@ -894,7 +894,7 @@ class Gathering:
         if not self.cache.already_gathered(gatherer, focus):
             _gatherer_kwargs = {
                 **self.gatherer_kwargs,
-                **twopleset_as_twopledict(focus.gatherer_kwargset),
+                **dict(focus.gatherer_kwargset),
             }
             for triple in gatherer(focus, **_gatherer_kwargs):
                 self.cache.add_triple(triple)
