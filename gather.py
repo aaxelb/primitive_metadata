@@ -47,7 +47,7 @@ RdfObject = typing.Union[
     int, float,     # use primitives for numeric data
     datetime.date,  # use date and datetime built-ins
     frozenset,      # blanknodes as frozenset[twople]
-    tuple,          # ordered set as tuple[RdfObject]
+    tuple,          # rdf:Seq (TODO: should be rdf:List and explicit type)
 ]
 RdfTwople = tuple[RdfPredicate, RdfObject]  # implicit subject
 RdfTriple = tuple[RdfSubject, RdfPredicate, RdfObject]
@@ -82,6 +82,19 @@ def freeze_blanknode(twopledict: RdfTwopleDictionary) -> RdfBlanknode:
         (_pred, _obj)
         for _pred, _objectset in twopledict.items()
         for _obj in _objectset
+    )
+
+
+def add_triple_to_tripledict(
+    triple: RdfTriple,
+    tripledict: RdfTripleDictionary,
+):
+    (_subj, _pred, _obj) = triple
+    (
+        tripledict
+        .setdefault(_subj, dict())
+        .setdefault(_pred, set())
+        .add(_obj)
     )
 
 
@@ -245,6 +258,7 @@ def tripledict_as_rdflib(tripledict: RdfTripleDictionary):
             return _blanknode
         elif isinstance(obj, tuple):
             _list_bnode = rdflib.BNode()
+            # TODO: should be rdf:List?
             rdflib.Seq(_rdflib_graph, _list_bnode, [
                 _simple_rdflib_obj(_obj)
                 for _obj in obj
@@ -257,9 +271,83 @@ def tripledict_as_rdflib(tripledict: RdfTripleDictionary):
     return _rdflib_graph
 
 
+def tripledict_from_turtle(turtle: str):
+    # TODO: without rdflib (should be simpler;
+    # turtle already structured like RdfTripleDictionary)
+    try:
+        import rdflib
+    except ImportError:
+        raise Exception('tripledict_from_turtle depends on rdflib')
+    _rdflib_graph = rdflib.Graph()
+    _rdflib_graph.parse(data=turtle, format='turtle')
+    return tripledict_from_rdflib(_rdflib_graph)
+
+
+def tripledict_from_rdflib(rdflib_graph):
+    try:
+        import rdflib
+    except ImportError:
+        raise Exception('tripledict_from_rdflib depends on rdflib')
+    _open_subjects = set()
+
+    def _twoples(rdflib_subj) -> typing.Iterable[RdfTwople]:
+        if rdflib_subj in _open_subjects:
+            raise ValueError(
+                'cannot handle loopy blanknodes'
+                f' (reached {rdflib_subj} again after {_open_subjects})'
+            )
+        _open_subjects.add(rdflib_subj)
+        for _pred, _obj in rdflib_graph.predicate_objects(rdflib_subj):
+            if not isinstance(_pred, rdflib.URIRef):
+                raise ValueError(
+                    f'cannot handle non-iri predicates (got {_pred})',
+                )
+            yield (str(_pred), _obj_from_rdflib(_obj))
+        _open_subjects.remove(rdflib_subj)
+
+    def _obj_from_rdflib(rdflib_obj) -> RdfObject:
+        # TODO: handle rdf:List?
+        if isinstance(rdflib_obj, rdflib.URIRef):
+            return str(rdflib_obj)
+        if isinstance(rdflib_obj, rdflib.BNode):
+            return frozenset(_twoples(rdflib_obj))
+        if isinstance(rdflib_obj, rdflib.Literal):
+            if rdflib_obj.language:
+                return text(str(rdflib_obj), language_iris={
+                    IANA_LANGUAGE[rdflib_obj.language],
+                })
+            _as_python = rdflib_obj.toPython()
+            if isinstance(_as_python, (int, float, datetime.date)):
+                return _as_python
+            if rdflib_obj.datatype:
+                return text(str(rdflib_obj), language_iris={
+                    str(rdflib_obj.datatype),
+                })
+            return text(str(rdflib_obj.value), language_iris=())
+        raise ValueError(f'how obj? ({rdflib_obj})')
+
+    _tripledict = {}
+    for _rdflib_subj in rdflib_graph.subjects():
+        if isinstance(_rdflib_subj, rdflib.URIRef):
+            _subj = str(_rdflib_subj)
+            for _pred, _obj in _twoples(_rdflib_subj):
+                add_triple_to_tripledict(
+                    (_subj, _pred, _obj),
+                    _tripledict,
+                )
+    if rdflib_graph and not _tripledict:
+        raise ValueError(
+            'there was something, but we got nothing -- note that'
+            ' blanknodes not reachable from an IRI subject are omitted'
+        )
+    return _tripledict
+
+
 if __debug__:
     class TestRdflib(unittest.TestCase):
-        def test_as_rdflib(self):
+        maxDiff = None
+
+        def test_asfrom_rdflib(self):
             try:
                 import rdflib
                 import rdflib.compare
@@ -290,8 +378,7 @@ if __debug__:
                     },
                 }
             }
-            _expected = rdflib.Graph()
-            _expected.parse(data=f'''
+            _input_turtle = f'''
                 @prefix blarg: <{str(BLARG)}> .
 
                 blarg:ha
@@ -307,12 +394,18 @@ if __debug__:
                 blarg:ya blarg:ba "ha pa la xa"^^blarg:Dunno ,
                                   "naja yaba"^^blarg:Dunno ,
                                   "basic"@en .
-            ''', format='turtle')
+            '''
+            _expected = rdflib.Graph()
+            _expected.parse(format='turtle', data=_input_turtle)
             _actual = tripledict_as_rdflib(_tripledict)
             self.assertEqual(
                 rdflib.compare.to_isomorphic(_actual),
                 rdflib.compare.to_isomorphic(_expected),
             )
+            _from_rdflib = tripledict_from_rdflib(_expected)
+            self.assertEqual(_from_rdflib, _tripledict)
+            _from_turtle = tripledict_from_turtle(_input_turtle)
+            self.assertEqual(_from_turtle, _tripledict)
 
 
 class Text(typing.NamedTuple):
@@ -862,11 +955,9 @@ class _GatherCache:
         (_subj, _pred, _obj) = triple
         _subj = self.__maybe_unwrap_focus(_subj)
         _obj = self.__maybe_unwrap_focus(_obj)
-        (
-            self.tripledict
-            .setdefault(_subj, dict())
-            .setdefault(_pred, set())
-            .add(_obj)
+        add_triple_to_tripledict(
+            (_subj, _pred, _obj),
+            self.tripledict,
         )
 
     def peek(
