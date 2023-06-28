@@ -85,19 +85,6 @@ def freeze_blanknode(twopledict: RdfTwopleDictionary) -> RdfBlanknode:
     )
 
 
-def add_triple_to_tripledict(
-    triple: RdfTriple,
-    tripledict: RdfTripleDictionary,
-):
-    (_subj, _pred, _obj) = triple
-    (
-        tripledict
-        .setdefault(_subj, dict())
-        .setdefault(_pred, set())
-        .add(_obj)
-    )
-
-
 def twopleset_as_twopledict(
     twopleset: typing.Iterable[RdfTwople],
 ) -> RdfTwopleDictionary:
@@ -114,6 +101,19 @@ def twopleset_as_twopledict(
             _objectset = _twopledict[_pred] = set()
         _objectset.add(_obj)
     return _twopledict
+
+
+def add_triple_to_tripledict(
+    triple: RdfTriple,
+    tripledict: RdfTripleDictionary,
+):
+    (_subj, _pred, _obj) = triple
+    (
+        tripledict
+        .setdefault(_subj, dict())
+        .setdefault(_pred, set())
+        .add(_obj)
+    )
 
 
 if __debug__:
@@ -225,29 +225,20 @@ def tripledict_as_rdflib(tripledict: RdfTripleDictionary):
         if isinstance(obj, str):
             return rdflib.URIRef(obj)
         if isinstance(obj, Text):
-            if not obj.language_iris:
+            _language_iri = obj.language_iri
+            if not _language_iri:  # no language
                 return rdflib.Literal(obj.unicode_text)
-            try:
-                _language_iri = next(
-                    _iri
-                    for _iri in obj.language_iris
-                    if _iri in IANA_LANGUAGE
-                )
-            except StopIteration:  # non-standard language iri?
-                # datatype can be any iri; link your own language
-                return rdflib.Literal(
-                    obj.unicode_text,
-                    datatype=next(iter(obj.language_iris)),
-                )
-            else:  # found standard language tag
+            if _language_iri in IANA_LANGUAGE:  # standard language
                 _language_tag = IriNamespace.without_namespace(
                     _language_iri,
                     namespace=IANA_LANGUAGE,
                 )
-                return rdflib.Literal(
-                    obj.unicode_text,
-                    lang=_language_tag,
-                )
+                return rdflib.Literal(obj.unicode_text, lang=_language_tag)
+            # non-standard language (treat as datatype)
+            return rdflib.Literal(
+                obj.unicode_text,
+                datatype=rdflib.URIRef(_language_iri),
+            )
         elif isinstance(obj, (int, float, datetime.date)):
             return rdflib.Literal(obj)
         elif isinstance(obj, frozenset):
@@ -313,17 +304,16 @@ def tripledict_from_rdflib(rdflib_graph):
             return frozenset(_twoples(rdflib_obj))
         if isinstance(rdflib_obj, rdflib.Literal):
             if rdflib_obj.language:
-                return text(str(rdflib_obj), language_iris={
-                    IANA_LANGUAGE[rdflib_obj.language],
-                })
+                return text(str(rdflib_obj), language_tag=rdflib_obj.language)
             _as_python = rdflib_obj.toPython()
             if isinstance(_as_python, (int, float, datetime.date)):
                 return _as_python
             if rdflib_obj.datatype:
-                return text(str(rdflib_obj), language_iris={
-                    str(rdflib_obj.datatype),
-                })
-            return text(str(rdflib_obj.value), language_iris=())
+                return text(
+                    str(rdflib_obj),
+                    language_iri=str(rdflib_obj.datatype),
+                )
+            return text(str(rdflib_obj.value))
         raise ValueError(f'how obj? ({rdflib_obj})')
 
     _tripledict = {}
@@ -372,9 +362,10 @@ if __debug__:
                 },
                 BLARG.ya: {
                     BLARG.ba: {
-                        text('ha pa la xa', language_iris={BLARG.Dunno}),
-                        text('naja yaba', language_iris={BLARG.Dunno}),
-                        text('basic', language_iris={IANA_LANGUAGE.en}),
+                        text('ha pa la xa', language_iri=BLARG.Dunno),
+                        text('naja yaba', language_iri=BLARG.Dunno),
+                        text('basic', language_tag='en'),
+                        text('মৌলিক', language_iri=IANA_LANGUAGE.bn),
                     },
                 }
             }
@@ -393,7 +384,8 @@ if __debug__:
 
                 blarg:ya blarg:ba "ha pa la xa"^^blarg:Dunno ,
                                   "naja yaba"^^blarg:Dunno ,
-                                  "basic"@en .
+                                  "basic"@en ,
+                                  "মৌলিক"@bn .
             '''
             _expected = rdflib.Graph()
             _expected.parse(format='turtle', data=_input_turtle)
@@ -410,24 +402,31 @@ if __debug__:
 
 class Text(typing.NamedTuple):
     unicode_text: str
-    language_iris: frozenset[str]
+    language_iri: str
     # note: allow any iri to identify a text language
     # (if you wish to constrain to IETF language tags
-    # as https://www.rfc-editor.org/rfc/bcp/bcp47.txt
-    # use the defined IANA_LANGUAGE namespace, below)
-
-    def checksum_iri(self) -> str:
-        raise NotImplementedError('TODO')
+    # in https://www.rfc-editor.org/rfc/bcp/bcp47.txt
+    # use the `text` helper with `language_tag` param
+    # or an iri within the `IANA_LANGUAGE` namespace)
 
 
-def text(unicode_text: str, *, language_iris):
+def text(unicode_text: str, *, language_iri=None, language_tag=None):
     '''convenience wrapper for Text
     '''
     if not unicode_text:
         return None  # for easy omission
+    if language_tag is not None:
+        if language_iri is not None:
+            raise ValueError(
+                'expected at most one of `language_iri`'
+                ' and `language_tag`, not both'
+            )
+        _language_iri = IANA_LANGUAGE[language_tag]
+    else:
+        _language_iri = language_iri
     return Text(
         unicode_text=unicode_text,
-        language_iris=ensure_frozenset(language_iris),
+        language_iri=_language_iri,
     )
 
 
@@ -436,14 +435,14 @@ if __debug__:
         def test_blurb(self):
             my_blurb = text(
                 'blurbl di blarbl ga',
-                language_iris={BLARG['my-language']},
+                language_iri=BLARG['my-language'],
             )
             self.assertIsInstance(my_blurb.unicode_text, str)
-            self.assertIsInstance(my_blurb.language_iris, frozenset)
+            self.assertIsInstance(my_blurb.language_iri, str)
             self.assertEqual(my_blurb.unicode_text, 'blurbl di blarbl ga')
             self.assertEqual(
-                my_blurb.language_iris,
-                frozenset({'https://blarg.example/my-language'}),
+                my_blurb.language_iri,
+                'https://blarg.example/my-language',
             )
 
 
@@ -516,13 +515,7 @@ class IriNamespace:
     ):
         # TODO: namespace metadata/definition
         if ':' not in iri:
-            raise ValueError(
-                # trying out `Text` for translatable error messaging
-                text(
-                    f'expected iri to have a ":" (got "{iri}")',
-                    language_iris={IANA_LANGUAGE.en},
-                )
-            )
+            raise ValueError(f'expected iri to have a ":" (got "{iri}")')
         # assume python's "private name mangling" will avoid conflicts
         self.__iri = iri
         self.__namestory = namestory
@@ -613,9 +606,9 @@ IANA_LANGUAGE_REGISTRY_IRI = (
 IANA_LANGUAGE = IriNamespace(
     f'{IANA_LANGUAGE_REGISTRY_IRI}#',
     namestory=lambda: (
-        text('lang', language_iris={IANA_LANGUAGE['en-US']}),
-        text('language', language_iris={IANA_LANGUAGE['en-US']}),
-        text('language tag', language_iris={IANA_LANGUAGE['en-US']}),
+        text('lang', language_iri=IANA_LANGUAGE['en-US']),
+        text('language', language_iri=IANA_LANGUAGE['en-US']),
+        text('language tag', language_iri=IANA_LANGUAGE['en-US']),
         text((
             'a "language tag" (as used by RDF and defined by IETF'
             ' ( https://www.ietf.org/rfc/bcp/bcp47.txt )) has the'
@@ -625,7 +618,7 @@ IANA_LANGUAGE = IriNamespace(
             ' Registry as an IRI namespace (even tho the fragment'
             ' does not identify an item in the registry, as "tag"'
             ' and "SUBTAG" are defined separately)'
-        ), language_iris={IANA_LANGUAGE['en-US']}),
+        ), language_iri=IANA_LANGUAGE['en-US']),
     ),
 )
 
@@ -647,11 +640,11 @@ if __debug__:
                 namestory=(
                     text(
                         'my-subvocab',
-                        language_iris={IANA_LANGUAGE['en-US']},
+                        language_iri=IANA_LANGUAGE['en-US'],
                     ),
                     text(
                         'a namespace nested within the BLARG namespace',
-                        language_iris={IANA_LANGUAGE['en-US']},
+                        language_iri=IANA_LANGUAGE['en-US'],
                     ),
                 ),
             )
@@ -1076,11 +1069,11 @@ class _GathererSignup:
 if __debug__:
     BlargAtheringNorms = GatheringNorms(
         namestory=(
-            text('blarg', language_iris={BLARG.myLanguage}),
-            text('blargl blarg', language_iris={BLARG.myLanguage}),
+            text('blarg', language_iri=BLARG.myLanguage),
+            text('blargl blarg', language_iri=BLARG.myLanguage),
             text(
                 'a gathering called "blarg"',
-                language_iris={IANA_LANGUAGE['en-US']},
+                language_iri=IANA_LANGUAGE['en-US'],
             ),
         ),
         vocabulary={
@@ -1098,7 +1091,7 @@ if __debug__:
 
     BlorgArganizer = GatheringOrganizer(
         namestory=(
-            text('blarg this way', language_iris={BLARG.myLanguage}),
+            text('blarg this way', language_iri=BLARG.myLanguage),
         ),
         norms=BlargAtheringNorms,
         gatherer_kwargnames={'hello'},
@@ -1108,19 +1101,19 @@ if __debug__:
     def blargather_greeting(focus: Focus, *, hello):
         yield (BLARG.greeting, text(
             'kia ora',
-            language_iris={IANA_LANGUAGE.mi},
+            language_iri=IANA_LANGUAGE.mi,
         ))
         yield (BLARG.greeting, text(
             'hola',
-            language_iris={IANA_LANGUAGE.es},
+            language_iri=IANA_LANGUAGE.es,
         ))
         yield (BLARG.greeting, text(
             'hello',
-            language_iris={IANA_LANGUAGE.en},
+            language_iri=IANA_LANGUAGE.en,
         ))
         yield (BLARG.greeting, text(
             hello,
-            language_iris={BLARG.Dunno},
+            language_iri=BLARG.Dunno,
         ))
 
     @BlorgArganizer.gatherer(focustype_iris={BLARG.SomeType})
@@ -1179,10 +1172,10 @@ if __debug__:
             self.assertEqual(
                 set(blargAthering.ask(_blarg_some_focus, BLARG.greeting)),
                 {
-                    text('kia ora', language_iris={IANA_LANGUAGE.mi}),
-                    text('hola', language_iris={IANA_LANGUAGE.es}),
-                    text('hello', language_iris={IANA_LANGUAGE.en}),
-                    text('haha', language_iris={BLARG.Dunno}),
+                    text('kia ora', language_iri=IANA_LANGUAGE.mi),
+                    text('hola', language_iri=IANA_LANGUAGE.es),
+                    text('hello', language_iri=IANA_LANGUAGE.en),
+                    text('haha', language_iri=BLARG.Dunno),
                 },
             )
             self.assertEqual(
@@ -1211,10 +1204,10 @@ if __debug__:
                 _blarg_some_focus.single_iri(): {
                     RDF.type: {BLARG.SomeType},
                     BLARG.greeting: {
-                        text('kia ora', language_iris={IANA_LANGUAGE.mi}),
-                        text('hola', language_iris={IANA_LANGUAGE.es}),
-                        text('hello', language_iris={IANA_LANGUAGE.en}),
-                        text('hoohoo', language_iris={BLARG.Dunno}),
+                        text('kia ora', language_iri=IANA_LANGUAGE.mi),
+                        text('hola', language_iri=IANA_LANGUAGE.es),
+                        text('hello', language_iri=IANA_LANGUAGE.en),
+                        text('hoohoo', language_iri=BLARG.Dunno),
                     },
                     BLARG.yoo: {_blarg_nother_focus.single_iri()},
                     BLARG.number: {1},
@@ -1222,10 +1215,10 @@ if __debug__:
                 _blarg_nother_focus.single_iri(): {
                     RDF.type: {BLARG.AnotherType},
                     BLARG.greeting: {
-                        text('kia ora', language_iris={IANA_LANGUAGE.mi}),
-                        text('hola', language_iris={IANA_LANGUAGE.es}),
-                        text('hello', language_iris={IANA_LANGUAGE.en}),
-                        text('hoohoo', language_iris={BLARG.Dunno}),
+                        text('kia ora', language_iri=IANA_LANGUAGE.mi),
+                        text('hola', language_iri=IANA_LANGUAGE.es),
+                        text('hello', language_iri=IANA_LANGUAGE.en),
+                        text('hoohoo', language_iri=BLARG.Dunno),
                     },
                     BLARG.yoo: {_blarg_some_focus.single_iri()},
                 },
