@@ -47,7 +47,6 @@ RdfObject = typing.Union[
     int, float,     # use primitives for numeric data
     datetime.date,  # use date and datetime built-ins
     frozenset,      # blanknodes as frozenset[twople]
-    tuple,          # rdf:Seq (TODO: should be rdf:List and explicit type)
 ]
 RdfTwople = tuple[RdfPredicate, RdfObject]  # implicit subject
 RdfTriple = tuple[RdfSubject, RdfPredicate, RdfObject]
@@ -247,14 +246,6 @@ def tripledict_as_rdflib(tripledict: RdfTripleDictionary):
             for _pred, _obj in obj:
                 _add_to_rdflib_graph(_blanknode, rdflib.URIRef(_pred), _obj)
             return _blanknode
-        elif isinstance(obj, tuple):
-            _list_bnode = rdflib.BNode()
-            # TODO: should be rdf:List?
-            rdflib.Seq(_rdflib_graph, _list_bnode, [
-                _simple_rdflib_obj(_obj)
-                for _obj in obj
-            ])
-            return _list_bnode
         raise ValueError(f'expected RdfObject, got {obj}')
 
     for (_subj, _pred, _obj) in tripledict_as_tripleset(tripledict):
@@ -734,6 +725,54 @@ def tidy_predicate_pathset(
     return _pathset
 
 
+def objects_by_pathset(
+    tripledict: RdfTripleDictionary,
+    focus_iri: str,
+    pathset: MaybePredicatePathSet,
+) -> typing.Iterable[RdfObject]:
+    return _objects_by_tidy_pathset(
+        tripledict,
+        focus_iri,
+        tidy_predicate_pathset(pathset),
+    )
+
+
+def _objects_by_tidy_pathset(
+    tripledict: RdfTripleDictionary,
+    focus_iri: str,
+    pathset: PredicatePathSet,
+) -> typing.Iterable[RdfObject]:
+    return _twopledict_objects_by_tidy_pathset(
+        tripledict,
+        tripledict.get(focus_iri, {}),
+        pathset,
+    )
+
+
+def _twopledict_objects_by_tidy_pathset(
+    tripledict: RdfTripleDictionary,
+    focus_twopledict: RdfTwopleDictionary,
+    pathset: PredicatePathSet,
+) -> typing.Iterable[RdfObject]:
+    for _predicate_iri, _next_pathset in pathset.items():
+        _object_set = focus_twopledict.get(_predicate_iri, set())
+        if not _next_pathset:  # end of path
+            yield from _object_set
+        else:  # more path
+            for _obj in _object_set:
+                if isinstance(_obj, str):
+                    _next_twopledict = tripledict.get(_obj, {})
+                elif isinstance(_obj, frozenset):
+                    _next_twopledict = twopleset_as_twopledict(_obj)
+                else:
+                    continue
+                yield from _twopledict_objects_by_tidy_pathset(
+                    tripledict,
+                    _next_twopledict,
+                    _next_pathset,
+                )
+
+
 ###
 # to start gathering information:
 # - declare a `GatheringNorms` with pre-defined vocabularies, names, etc.
@@ -967,18 +1006,7 @@ class _GatherCache:
             raise ValueError(
                 f'expected focus to be str or Focus or None (got {focus})'
             )
-        for _predicate_iri, _next_pathset in pathset.items():
-            _object_set = (
-                self.tripledict
-                .get(_focus_iri, {})
-                .get(_predicate_iri, set())
-            )
-            if _next_pathset:
-                for _obj in _object_set:
-                    if isinstance(_obj, str):
-                        yield from self.peek(_next_pathset, focus=_obj)
-            else:
-                yield from _object_set
+        return _objects_by_tidy_pathset(self.tripledict, _focus_iri, pathset)
 
     def already_gathered(
         self, gatherer: Gatherer, focus: Focus, *,
