@@ -279,16 +279,20 @@ def tripledict_from_rdflib(rdflib_graph):
                 f' (reached {rdflib_subj} again after {_open_subjects})'
             )
         _open_subjects.add(rdflib_subj)
-        for _pred, _obj in rdflib_graph.predicate_objects(rdflib_subj):
-            if not isinstance(_pred, rdflib.URIRef):
+        for _rdflib_pred, _rdflib_obj in rdflib_graph.predicate_objects(
+            rdflib_subj
+        ):
+            if not isinstance(_rdflib_pred, rdflib.URIRef):
                 raise ValueError(
-                    f'cannot handle non-iri predicates (got {_pred})',
+                    f'cannot handle non-iri predicates (got {_rdflib_pred})',
                 )
-            yield (str(_pred), _obj_from_rdflib(_obj))
+            _obj = _obj_from_rdflib(_rdflib_obj)
+            if _obj:
+                yield (str(_rdflib_pred), _obj)
         _open_subjects.remove(rdflib_subj)
 
     def _obj_from_rdflib(rdflib_obj) -> RdfObject:
-        # TODO: handle rdf:List?
+        # TODO: handle rdf:List and friends?
         if isinstance(rdflib_obj, rdflib.URIRef):
             return str(rdflib_obj)
         if isinstance(rdflib_obj, rdflib.BNode):
