@@ -596,7 +596,7 @@ OWL = IriNamespace('http://www.w3.org/2002/07/owl#')
 # here is a probably-reliable way to express IETF
 # language tags in iri form
 IANA_LANGUAGE_REGISTRY_IRI = (
-    'https://www.iana.org/assignments/language-subtag-registry#'
+    'https://www.iana.org/assignments/language-subtag-registry'
 )
 IANA_LANGUAGE = IriNamespace(
     f'{IANA_LANGUAGE_REGISTRY_IRI}#',
