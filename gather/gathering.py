@@ -236,7 +236,7 @@ class Gathering:
             _focus = _focus_to_visit.pop()
             if _focus not in _focus_visited:
                 _focus_visited.add(_focus)
-                self.ask(_focus, _predicate_iris)
+                self.ask(_predicate_iris, focus=_focus)
                 _focus_to_visit.update(self.cache.focus_set - _focus_visited)
 
     def leaf_a_record(self, *, pls_copy=False) -> RdfTripleDictionary:
@@ -436,11 +436,11 @@ class _GathererSignup:
 
 if __debug__:
     BLARG = IriNamespace('https://blarg.example/')
-    _blarg_some_focus = focus(
+    _a_blargfocus = focus(
         BLARG.asome,
         type_iris=BLARG.SomeType,
     )
-    _blarg_nother_focus = focus(
+    _nother_blargfocus = focus(
         BLARG.another,
         type_iris=BLARG.AnotherType,
     )
@@ -500,10 +500,10 @@ if __debug__:
 
     @BlorgArganizer.gatherer(BLARG.yoo)
     def blargather_yoo(focus: Focus, *, hello):
-        if focus == _blarg_some_focus:
-            yield (BLARG.yoo, _blarg_nother_focus)
+        if focus == _a_blargfocus:
+            yield (BLARG.yoo, _nother_blargfocus)
         else:
-            yield (BLARG.yoo, _blarg_some_focus)
+            yield (BLARG.yoo, _a_blargfocus)
 
     class GatheringExample(unittest.TestCase):
         maxDiff = None
@@ -511,32 +511,32 @@ if __debug__:
         def test_gathering_declaration(self):
             self.assertEqual(
                 BlorgArganizer.signup.get_gatherers(
-                    _blarg_some_focus,
+                    _a_blargfocus,
                     {BLARG.greeting},
                 ),
                 {blargather_greeting, blargather_focustype},
             )
             self.assertEqual(
-                BlorgArganizer.signup.get_gatherers(_blarg_some_focus, {}),
+                BlorgArganizer.signup.get_gatherers(_a_blargfocus, {}),
                 {blargather_focustype},
             )
             self.assertEqual(
                 BlorgArganizer.signup.get_gatherers(
-                    _blarg_nother_focus,
+                    _nother_blargfocus,
                     {BLARG.greeting},
                 ),
                 {blargather_greeting},
             )
             self.assertEqual(
                 BlorgArganizer.signup.get_gatherers(
-                    _blarg_nother_focus,
+                    _nother_blargfocus,
                     {BLARG.greeting, BLARG.yoo},
                 ),
                 {blargather_greeting, blargather_yoo},
             )
             self.assertEqual(
                 BlorgArganizer.signup.get_gatherers(
-                    _blarg_nother_focus,
+                    _nother_blargfocus,
                     {},
                 ),
                 set(),
@@ -547,7 +547,7 @@ if __debug__:
                 'hello': 'haha',
             })
             self.assertEqual(
-                set(blargAthering.ask(_blarg_some_focus, BLARG.greeting)),
+                set(blargAthering.ask(BLARG.greeting, focus=_a_blargfocus)),
                 {
                     text('kia ora', language_tag='mi'),
                     text('hola', language_tag='es'),
@@ -557,28 +557,28 @@ if __debug__:
             )
             self.assertEqual(
                 set(blargAthering.ask(
-                    _blarg_some_focus,
                     BLARG.unknownpredicate,
+                    focus=_a_blargfocus,
                 )),
                 set(),
             )
             self.assertEqual(
-                set(blargAthering.ask(_blarg_some_focus, BLARG.yoo)),
-                {_blarg_nother_focus.single_iri()},
+                set(blargAthering.ask(BLARG.yoo, focus=_a_blargfocus)),
+                {_nother_blargfocus.single_iri()},
             )
             self.assertEqual(
-                set(blargAthering.ask(_blarg_nother_focus, BLARG.yoo)),
-                {_blarg_some_focus.single_iri()},
+                set(blargAthering.ask(BLARG.yoo, focus=_nother_blargfocus)),
+                {_a_blargfocus.single_iri()},
             )
 
         def test_ask_all_about(self):
             blargAthering = BlorgArganizer.new_gathering({
                 'hello': 'hoohoo',
             })
-            blargAthering.ask_all_about(_blarg_some_focus)
+            blargAthering.ask_all_about(_a_blargfocus)
             _tripledict = blargAthering.leaf_a_record(pls_copy=True)
             self.assertEqual(_tripledict, {
-                _blarg_some_focus.single_iri(): {
+                _a_blargfocus.single_iri(): {
                     RDF.type: {BLARG.SomeType},
                     BLARG.greeting: {
                         text('kia ora', language_tag='mi'),
@@ -586,10 +586,10 @@ if __debug__:
                         text('hello', language_tag='en'),
                         text('hoohoo', language_iri=BLARG.Dunno),
                     },
-                    BLARG.yoo: {_blarg_nother_focus.single_iri()},
+                    BLARG.yoo: {_nother_blargfocus.single_iri()},
                     BLARG.number: {1},
                 },
-                _blarg_nother_focus.single_iri(): {
+                _nother_blargfocus.single_iri(): {
                     RDF.type: {BLARG.AnotherType},
                     BLARG.greeting: {
                         text('kia ora', language_tag='mi'),
@@ -597,7 +597,7 @@ if __debug__:
                         text('hello', language_tag='en'),
                         text('hoohoo', language_iri=BLARG.Dunno),
                     },
-                    BLARG.yoo: {_blarg_some_focus.single_iri()},
+                    BLARG.yoo: {_a_blargfocus.single_iri()},
                 },
             })
 
