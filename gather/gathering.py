@@ -311,13 +311,13 @@ class _GatherCache(TripledictWrapper):
                 self.add_triple(triple)
 
     def get_focus_by_iri(self, iri: str):
-        _type_iris = frozenset(self.iter_objects(iri, RDF.type))
+        _type_iris = frozenset(self.q(iri, RDF.type))
         if not _type_iris:
             raise GatherException(
                 label='cannot-get-focus',
                 comment=f'found no type for "{iri}"',
             )
-        _same_iris = self.iter_objects(iri, OWL.sameAs)
+        _same_iris = self.q(iri, OWL.sameAs)
         _iris = {iri, *_same_iris}
         _focus = focus(iris=_iris, type_iris=_type_iris)
         self.add_focus(_focus)
@@ -343,7 +343,7 @@ class _GatherCache(TripledictWrapper):
             raise ValueError(
                 f'expected focus to be str or Focus or None (got {focus})'
             )
-        return self.iter_objects(_focus_iri, pathset)
+        return self.q(_focus_iri, pathset)
 
     def already_gathered(
         self, gatherer: Gatherer, focus: Focus, *,
