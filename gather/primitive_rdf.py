@@ -3,6 +3,7 @@
 # only standard imports (python 3.? (TODO: specificity))
 import datetime
 import logging
+import operator
 from typing import Iterable, Union, Optional, NamedTuple
 
 if __debug__:  # examples/tests thru-out, wrapped in `__debug__`
@@ -413,6 +414,66 @@ if __debug__:
                 my_blurb.language_iri,
                 'https://blarg.example/my-language',
             )
+
+
+def container(container_type: str, items: Iterable[RdfObject]) -> RdfBlanknode:
+    '''
+    >>> container(RDF.Bag, [11,12,13]) == frozenset((
+    ...     (RDF.type, RDF.Bag),
+    ...     (RDF._1, 11),
+    ...     (RDF._2, 12),
+    ...     (RDF._3, 13),
+    ... ))
+    True
+    '''
+    _indexed_twoples = (
+        (RDF[f'_{_index+1}'], _item)
+        for _index, _item in enumerate(items)
+    )
+    return frozenset((
+        (RDF.type, container_type),
+        *_indexed_twoples,
+    ))
+
+
+def sequence(items: Iterable[RdfObject]) -> RdfBlanknode:
+    '''
+    >>> sequence([3,2,1]) == frozenset((
+    ...     (RDF.type, RDF.Seq),
+    ...     (RDF._1, 3),
+    ...     (RDF._2, 2),
+    ...     (RDF._3, 1),
+    ... ))
+    True
+    '''
+    return container(RDF.Seq, items)
+
+
+def sequence_objects_in_order(seq: RdfBlanknode) -> Iterable[RdfObject]:
+    '''
+    >>> _seq = sequence([5,4,3,2,1])
+    >>> list(sequence_objects_in_order(_seq))
+    [5, 4, 3, 2, 1]
+    '''
+    assert (RDF.type, RDF.Seq) in seq
+    yield from map(
+        operator.itemgetter(1),
+        sorted(_container_objects(seq), key=operator.itemgetter(0)),
+    )
+
+
+def _container_objects(bnode: RdfBlanknode) -> Iterable[tuple[int, RdfObject]]:
+    _INDEX_NAMESPACE = IriNamespace(RDF['_'])  # rdf:_1, rdf:_2, ...
+    for _pred, _obj in bnode:
+        try:
+            _index = int(IriNamespace.without_namespace(
+                _pred,
+                namespace=_INDEX_NAMESPACE,
+            ))
+        except ValueError:
+            pass
+        else:
+            yield (_index, _obj)
 
 
 ###

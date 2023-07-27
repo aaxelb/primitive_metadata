@@ -2,14 +2,14 @@
 > note: unstable and subject to wild change, tho with intent to settle
 
 <blockquote>
-gather (verb)
-    - to collect; normally separate things
-        - to harvest food
-        - to accumulate over time, to amass little by little
-        - to congregate, or assemble
-        - to grow gradually larger by accretion
-    - to bring parts of a whole closer
-    - to infer or conclude; to know from a different source.
+gather (verb)<br>
+    - to collect; normally separate things<br>
+        - to harvest food<br>
+        - to accumulate over time, to amass little by little<br>
+        - to congregate, or assemble<br>
+        - to grow gradually larger by accretion<br>
+    - to bring parts of a whole closer<br>
+    - to infer or conclude; to know from a different source.<br>
 (gathered from https://en.wiktionary.org/wiki/gather )
 </blockquote>
 
