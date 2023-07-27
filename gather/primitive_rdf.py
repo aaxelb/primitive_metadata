@@ -436,6 +436,13 @@ def container(container_type: str, items: Iterable[RdfObject]) -> RdfBlanknode:
     ))
 
 
+def is_container(bnode: RdfBlanknode) -> bool:
+    return any(
+        (RDF.type, _container_type) in bnode
+        for _container_type in (RDF.Seq, RDF.Bag, RDF.Alt, RDF.Container)
+    )
+
+
 def sequence(items: Iterable[RdfObject]) -> RdfBlanknode:
     '''
     >>> sequence([3,2,1]) == frozenset((
@@ -458,11 +465,23 @@ def sequence_objects_in_order(seq: RdfBlanknode) -> Iterable[RdfObject]:
     assert (RDF.type, RDF.Seq) in seq
     yield from map(
         operator.itemgetter(1),
-        sorted(_container_objects(seq), key=operator.itemgetter(0)),
+        sorted(_container_indexobjects(seq), key=operator.itemgetter(0)),
     )
 
 
-def _container_objects(bnode: RdfBlanknode) -> Iterable[tuple[int, RdfObject]]:
+def container_objects(bnode: RdfBlanknode) -> Iterable[RdfObject]:
+    '''
+    >>> _seq = sequence([5,4,3,2,1])
+    >>> set(container_objects(_seq)) == {1,2,3,4,5}
+    True
+    '''
+    for _, _obj in _container_indexobjects(bnode):
+        yield _obj
+
+
+def _container_indexobjects(
+    bnode: RdfBlanknode,
+) -> Iterable[tuple[int, RdfObject]]:
     _INDEX_NAMESPACE = IriNamespace(RDF['_'])  # rdf:_1, rdf:_2, ...
     for _pred, _obj in bnode:
         try:

@@ -26,6 +26,8 @@ from gather.primitive_rdf import (
     TidyPathset,
     TripledictWrapper,
     ensure_frozenset,
+    is_container,
+    container_objects,
     text,
     tidy_pathset,
 )
@@ -269,10 +271,14 @@ class Gathering:
             else:
                 self.__gather_by_pathset(pathset, focus=_next_focus)
         elif isinstance(obj, frozenset):  # blank node
-            for _pred, _obj in obj:
-                _next_pathset = pathset.get(_pred)
-                if _next_pathset:
-                    self.__gather_thru_object(_next_pathset, _obj)
+            if is_container(obj):  # pass thru rdf containers transparently
+                for _container_obj in container_objects(obj):
+                    self.__gather_thru_object(pathset, _container_obj)
+            else:  # not a container
+                for _pred, _obj in obj:
+                    _next_pathset = pathset.get(_pred)
+                    if _next_pathset:
+                        self.__gather_thru_object(_next_pathset, _obj)
         # otherwise, ignore
 
     def __gather_predicate_iris(
