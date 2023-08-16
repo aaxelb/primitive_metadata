@@ -49,7 +49,7 @@ class Focus(NamedTuple):
     gatherer_kwargset: frozenset[tuple[str, Any]]
 
     def single_iri(self) -> str:
-        return next(iter(sorted(self.iris)))  # TODO: something better
+        return min(self.iris, key=len)  # choose the shortest iri
 
     def as_rdf_tripleset(self) -> Iterable[RdfTriple]:
         _iri = self.single_iri()

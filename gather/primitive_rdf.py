@@ -603,6 +603,7 @@ class IriNamespace:
 RDF = IriNamespace('http://www.w3.org/1999/02/22-rdf-syntax-ns#')
 RDFS = IriNamespace('http://www.w3.org/2000/01/rdf-schema#')
 OWL = IriNamespace('http://www.w3.org/2002/07/owl#')
+XSD = IriNamespace('http://www.w3.org/2001/XMLSchema#')
 
 # `gather.Text` uses an iri to identify language;
 # here is a probably-reliable way to express IETF
