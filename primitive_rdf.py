@@ -577,7 +577,9 @@ Namestory = tuple['Dropping', ...]
 ###
 # for using iris without having to type out full iris
 class IriNamespace:
-    '''IriNamespace: for building and using IRIs easily in python code
+    '''IriNamespace: the set of all possible names which begin with a given iri
+
+    is a convenience for building and using IRIs easily in python code
     (ideally IRLs ("L" for "Locator", an IRI which locates an internet
     document (like via `http`/`https`) and resolves to something which
     makes enough sense given context), but this toolkit does not check
@@ -1025,6 +1027,90 @@ def rdfobject_from_nocontext_jsonld(jsonld_obj: dict):
             return drop(_value, language_iri=_type_iri)
     # if no '@id' or '@value', treat as blank node
     return twopledict_from_nocontext_jsonld(jsonld_obj)
+
+
+###
+# primitive-context json-ld serialization
+
+# constant PRIMITIVE_JSONLD_CONTEXT assumed part of the jsonld @context
+# make sure full iris can be reconstructed without any network requests
+PRIMITIVE_JSONLD_CONTEXT = {
+    '@container': '@id',  # object with iri keys as RdfTripleDictionary
+}
+
+
+def compact_iri(
+    iri: str,
+    shortnames: dict[str, str],
+    *,
+    delimiter=':',
+) -> str:
+    '''
+    >>> BLARG = IriNamespace('http://blarg.example/')
+    >>> _namespaces = {'blarg': BLARG}
+    >>> compact_iri(BLARG.haha, _namespaces)
+    'blarg:haha'
+    >>> _namespaces['lol'] = BLARG.haha
+    >>> compact_iri(BLARG.haha, _namespaces)
+    'lol'
+    >>> compact_iri(BLARG.haha, {'lol': 'http://blarg.example/haha#heehee'})
+    'http://blarg.example/haha'
+    >>> compact_iri(BLARG.haha, {})
+    'http://blarg.example/haha'
+    '''
+    def _shortname_matches(shortname, namespace) -> bool:
+        return (
+            (iri in namespace)
+            if isinstance(namespace, IriNamespace)
+            else iri.startswith(namespace)
+        )
+
+    def _build_compact_iri(shortname, namespace) -> str:
+        _leafname = IriNamespace.without_namespace(iri, namespace=namespace)
+        return (
+            f'{shortname}{delimiter}{_leafname}'
+            if _leafname
+            else shortname
+        )
+
+    _shortened_iris = {
+        _build_compact_iri(_shortname, _namespace)
+        for _shortname, _namespace in shortnames.items()
+        if _shortname_matches(_shortname, _namespace)
+    }
+    if not _shortened_iris:
+        return iri  # no shortening
+    return min(_shortened_iris, key=len)
+
+
+def _primitive_names():
+    return {
+        'owl': OWL,
+        'rdf': RDF,
+        'rdfs': RDFS,
+    }
+
+
+def tripledict_as_jsonld(
+    tripledict: RdfTripleDictionary, *,
+    no_context: bool = False,
+    shortnames: Optional[dict[str, IriNamespace]] = None,
+) -> dict:
+    '''build a json-serializable copy of the given tripledict
+    '''
+    _jsonld = {
+        # TODO
+    }
+    if not no_context:
+        _jsonld['@context'] = {
+            **PRIMITIVE_JSONLD_CONTEXT,
+            **(shortnames or {}),
+        }
+    return _jsonld
+
+
+def rdfobject_as_jsonld(obj: RdfObject):
+    pass
 
 
 ###
