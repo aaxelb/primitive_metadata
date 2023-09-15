@@ -10,12 +10,6 @@ import logging
 import operator
 from typing import Iterable, Union, Optional, NamedTuple
 
-if __debug__:  # examples/tests thru-out, wrapped in `__debug__`
-    # run tests with the command `python3 -m unittest gather.py`
-    # (or discard tests with `-O` or `-OO` command-line options)
-    import unittest  # TODO: doctest instead (or in addition?)
-
-
 logger = logging.getLogger(__name__)
 
 
@@ -109,7 +103,8 @@ def blanknode(
     ... }
     True
     '''
-    return frozenset(iter_twoples(twopledict))
+    if isinstance(twopledict, dict):
+        return frozenset(iter_twoples(twopledict))
 
 
 def iter_twoples(twopledict: RdfTwopleDictionary) -> Iterable[RdfTwople]:
@@ -285,7 +280,7 @@ class Datum(NamedTuple):
 
 def datum(
     primitive_datum: Union[str, int, float, datetime.date, None], *,
-    language_iris: Iterable[str] = (),
+    language_iris: Union[str, Iterable[str]] = (),
     language_tag=None,
 ) -> Union[Datum, None]:
     '''convenience wrapper for Datum
@@ -422,7 +417,7 @@ def sequence_objects_in_order(seq: RdfBlanknode) -> Iterable[RdfObject]:
     assert (RDF.type, RDF.Seq) in seq
     yield from map(
         operator.itemgetter(1),
-        sorted(_container_indexobjects(seq), key=operator.itemgetter(0)),
+        sorted(_enumerate_container(seq), key=operator.itemgetter(0)),
     )
 
 
@@ -432,11 +427,11 @@ def container_objects(bnode: RdfBlanknode) -> Iterable[RdfObject]:
     >>> set(container_objects(_seq)) == {1,2,3,4,5}
     True
     '''
-    for _, _obj in _container_indexobjects(bnode):
+    for _, _obj in _enumerate_container(bnode):
         yield _obj
 
 
-def _container_indexobjects(
+def _enumerate_container(
     bnode: RdfBlanknode,
 ) -> Iterable[tuple[int, RdfObject]]:
     _INDEX_NAMESPACE = IriNamespace(RDF['_'])  # rdf:_1, rdf:_2, ...
@@ -469,7 +464,6 @@ class IriNamespace:
     makes enough sense given context), but this toolkit does not check
     for locatorishness and treats any IRI like an IRN ("N" for "Name")
 
-    >>> BLARG = IriNamespace('http://blarg.example/')
     >>> BLARG.foo
     'http://blarg.example/foo'
     >>> BLARG.blah
@@ -524,7 +518,6 @@ class IriNamespace:
     ) -> str:
         '''get the rest of the iri after its namespace
 
-        >>> BLARG = IriNamespace('http://blarg.example/')
         >>> IriNamespace.name(BLARG.foo, namespace=BLARG)
         'foo'
 
@@ -634,6 +627,141 @@ IANA_LANGUAGE = IriNamespace(
     ),
 )
 
+# map from a short string to a longer iri
+ShorthandPrefixMap = dict[str, Union[str, IriNamespace]]
+RDF_PRIMITIVE_SHORTHAND: ShorthandPrefixMap = {
+    'owl': OWL,
+    'rdf': RDF,
+    'rdfs': RDFS,
+    'xsd': XSD,
+}
+
+
+class IriShorthand:
+    __used_shorts = None  # for track_used_shorts
+
+    def __init__(
+        self,
+        prefix_map: Optional[ShorthandPrefixMap] = None,
+        delimiter=':',
+        with_rdf_primitive=True,
+    ):
+        self.prefix_map = {**(prefix_map or {})}  # make a copy; handle None
+        if with_rdf_primitive:
+            self.prefix_map.update(RDF_PRIMITIVE_SHORTHAND)
+        self.delimiter = delimiter
+
+    @contextlib.contextmanager
+    def track_used_shorts(self):
+        assert self.__used_shorts is None
+        _used_shorts = self.__used_shorts = set()
+        yield _used_shorts
+        self.__used_shorts = None
+
+    def compact_iri(self, iri: str) -> str:
+        '''return a compacted form of the given iri (or the iri unchanged)
+
+        >>> _shorthand = IriShorthand({'blarg': BLARG})
+        >>> _shorthand.compact_iri(BLARG.haha)
+        'blarg:haha'
+        >>> _shorthand.prefix_map['lol'] = BLARG.haha
+        >>> _shorthand.compact_iri(BLARG.haha)
+        'lol'
+        >>> _shorthand.delimiter = '--'
+        >>> _shorthand.compact_iri(BLARG.blah)
+        'blarg--blah'
+        >>> _shorthand.prefix_map = {'lol': 'http://blarg.example/haha#heehee'}
+        >>> _shorthand.compact_iri(BLARG.haha)
+        'http://blarg.example/haha'
+        >>> IriShorthand({}).compact_iri(BLARG.haha)
+        'http://blarg.example/haha'
+        '''
+        _matches = set(self._iter_shortenings(iri))
+        if not _matches:
+            return iri  # no shortening
+        # if multiple ways to shorten, use the shortest compact iri
+        _short_prefix, _compact_iri = min(
+            _matches,
+            key=lambda pair: len(pair[-1]),
+        )
+        self.__used_short(_short_prefix)
+        return _compact_iri
+
+    def expand_iri(self, iri: str) -> str:
+        '''return the expanded form of the given iri (or the iri unchanged)
+
+        >>> _shorthand = IriShorthand({'blarg': BLARG, 'blargl': BLARG.l})
+        >>> _shorthand.expand_iri('blarg')
+        'http://blarg.example/'
+        >>> _shorthand.expand_iri('blargl')
+        'http://blarg.example/l'
+        >>> _shorthand.expand_iri('blarg:foo')
+        'http://blarg.example/foo'
+        >>> _shorthand.expand_iri('flarg:boo')
+        'flarg:boo'
+        >>> _shorthand.expand_iri('http://something.example/else')
+        'http://something.example/else'
+        >>> IriShorthand({'http': BLARG}).expand_iri('http://foo.example')
+        'http://foo.example'
+        '''
+        try:
+            _exact_match = self.prefix_map[iri]
+        except KeyError:
+            pass
+        else:  # found exact match
+            self.__used_short(iri)
+            return (
+                str(_exact_match)
+                if isinstance(_exact_match, IriNamespace)
+                else _exact_match
+            )
+        _short_prefix, _delimiter, _remainder = iri.partition(self.delimiter)
+        if _delimiter and not _remainder.startswith('//'):
+            try:
+                _long_prefix = self.prefix_map[_short_prefix]
+            except KeyError:
+                pass
+            else:
+                self.__used_short(_short_prefix)
+                return f'{_long_prefix}{_remainder}'
+        return iri  # not a recognized shorthand
+
+    def expand_triple(self, triple):
+        (_subj, _pred, _obj) = triple
+        return (
+            self.expand_term(_subj),
+            self.expand_term(_pred),
+            self.expand_term(_obj),
+        )
+
+    def expand_term(self, term):
+        if isinstance(term, str):
+            return self.expand_iri(term)
+        if isinstance(term, frozenset):
+            return frozenset(
+                (self.expand_term(_pred), self.expand_term(_obj))
+                for _pred, _obj in term
+            )
+        return term
+
+    def _iter_shortenings(self, iri):
+        for _short, _long in self.prefix_map.items():
+            _is_match = (
+                (iri in _long)
+                if isinstance(_long, IriNamespace)
+                else iri.startswith(_long)
+            )
+            if _is_match:
+                _name = IriNamespace.name(iri, namespace=_long)
+                if _name:
+                    yield (_short, f'{_short}{self.delimiter}{_name}')
+                else:
+                    yield (_short, _short)
+
+    def __used_short(self, short_prefix):
+        if self.__used_shorts is not None:
+            self.__used_shorts.add(short_prefix)
+
 
 class RdfGraph:
     '''rdf-lingo convenience interface around a primitive RdfTripleDictionary
@@ -641,11 +769,12 @@ class RdfGraph:
     >>> _mygraph = RdfGraph({})
 
     '''
-    def __init__(self, tripledict: RdfTripleDictionary):
+    def __init__(self, tripledict, shorthand=None):
         self.tripledict = tripledict
+        self.shorthand = shorthand or IriShorthand()
 
     def add_triple(self, triple: RdfTriple):
-        (_subj, _pred, _obj) = triple
+        (_subj, _pred, _obj) = self.shorthand.expand_triple(triple)
         (
             self.tripledict
             .setdefault(_subj, dict())
@@ -654,7 +783,8 @@ class RdfGraph:
         )
 
     def add_twopledict(self, subject: str, twopledict: RdfTwopleDictionary):
-        pass
+        for _pred, _obj in iter_twoples(twopledict):
+            self.add_triple((subject, _pred, _obj))
 
     def has_triple(self, triple: RdfTriple) -> bool:
         (_subj, _pred, _obj) = triple
@@ -876,122 +1006,6 @@ def rdfobject_from_nocontext_jsonld(jsonld_obj: dict):
 ###
 # primitive-context json-ld serialization
 
-ShorthandPrefixMap = dict[str, Union[str, IriNamespace]]
-
-
-class IriShorthand:
-    RDF_PRIMITIVE_SHORTHAND: ShorthandPrefixMap = {
-        'owl': OWL,
-        'rdf': RDF,
-        'rdfs': RDFS,
-        'xsd': XSD,
-    }
-    __used_shorts = None  # for track_used_shorts
-
-    def __init__(
-        self,
-        prefix_map: Optional[ShorthandPrefixMap] = None,
-        delimiter=':',
-        with_rdf_primitive=True,
-    ):
-        self.prefix_map = {**(prefix_map or {})}  # make a copy; handle None
-        if with_rdf_primitive:
-            self.prefix_map.update(self.RDF_PRIMITIVE_SHORTHAND)
-        self.delimiter = delimiter
-
-    def compact_iri(self, iri: str) -> str:
-        '''return a compacted form of the given iri (or the iri unchanged)
-
-        >>> BLARG = IriNamespace('http://blarg.example/')
-        >>> _shorthand = IriShorthand({'blarg': BLARG})
-        >>> _shorthand.compact_iri(BLARG.haha)
-        'blarg:haha'
-        >>> _shorthand.prefix_map['lol'] = BLARG.haha
-        >>> _shorthand.compact_iri(BLARG.haha)
-        'lol'
-        >>> _shorthand.delimiter = '--'
-        >>> _shorthand.compact_iri(BLARG.blah)
-        'blarg--blah'
-        >>> _shorthand.prefix_map = {'lol': 'http://blarg.example/haha#heehee'}
-        >>> _shorthand.compact_iri(BLARG.haha)
-        'http://blarg.example/haha'
-        >>> IriShorthand({}).compact_iri(BLARG.haha)
-        'http://blarg.example/haha'
-        '''
-        _matches = set(self._iter_shortenings(iri))
-        if not _matches:
-            return iri  # no shortening
-        # if multiple ways to shorten, use the shortest compact iri
-        _short_prefix, _compact_iri = min(
-            _matches,
-            key=lambda pair: len(pair[-1]),
-        )
-        self.__used_short(_short_prefix)
-        return _compact_iri
-
-    def expand_iri(self, iri: str) -> str:
-        '''return the expanded form of the given iri (or the iri unchanged)
-
-        >>> BLARG = IriNamespace('http://blarg.example/')
-        >>> _shorthand = IriShorthand({'blarg': BLARG, 'blargl': BLARG.l})
-        >>> _shorthand.expand_iri('blarg')
-        'http://blarg.example/'
-        >>> _shorthand.expand_iri('blargl')
-        'http://blarg.example/l'
-        >>> _shorthand.expand_iri('blarg:foo')
-        'http://blarg.example/foo'
-        >>> _shorthand.expand_iri('flarg:boo')
-        'flarg:boo'
-        >>> _shorthand.expand_iri('http://something.example/else')
-        'http://something.example/else'
-        '''
-        try:
-            _exact_match = self.prefix_map[iri]
-        except KeyError:
-            pass
-        else:  # found exact match
-            self.__used_short(iri)
-            return (
-                str(_exact_match)
-                if isinstance(_exact_match, IriNamespace)
-                else _exact_match
-            )
-        _short_prefix, _delimiter, _remainder = iri.partition(self.delimiter)
-        if _delimiter:
-            try:
-                _long_prefix = self.prefix_map[_short_prefix]
-            except KeyError:
-                pass
-            else:
-                self.__used_short(_short_prefix)
-                return f'{_long_prefix}{_remainder}'
-        return iri  # not a recognized shorthand
-
-    def _iter_shortenings(self, iri):
-        for _short, _long in self.prefix_map.items():
-            _is_match = (
-                (iri in _long)
-                if isinstance(_long, IriNamespace)
-                else iri.startswith(_long)
-            )
-            if _is_match:
-                _name = IriNamespace.name(iri, namespace=_long)
-                if _name:
-                    yield (_short, f'{_short}{self.delimiter}{_name}')
-                else:
-                    yield (_short, _short)
-
-    def __used_short(self, short_prefix):
-        if self.__used_shorts is not None:
-            self.__used_shorts.add(short_prefix)
-
-    @contextlib.contextmanager
-    def track_used_shorts(self):
-        assert self.__used_shorts is None
-        _used_shorts = self.__used_shorts = set()
-        yield _used_shorts
-
-
 class JsonldSerializer:
     '''
 
@@ -1197,23 +1211,20 @@ else:
 
     # imagine could pass `metadata={...}` to `dataclass()` same as `field()`
     _DATACLASS_METADATA = weakref.WeakKeyDictionary()
-    _DATACLASS_IRIS = weakref.WeakKeyDictionary()
 
     def get_dataclass_metadata(datacls) -> dict:
         return _DATACLASS_METADATA.get(datacls, {})
 
-    def get_dataclass_iri(datacls) -> Optional[str]:
-        return _DATACLASS_IRIS.get(datacls)
+    def dataclass_metadata(*, metadata=None):
+        '''allow decorating a class
 
-    def rdf_dataclass(iri: str, *, metadata=None):
-        '''express the given dataclass instance as RDF predicate-subject pairs
-
-        >>> BLARG = IriNamespace('http://blarg.example/vocab/')
-
-        call `rdf_dataclass` on a dataclass (or use it as a decorator
-        before `@dataclasses.dataclass`
-        pass `metadata` to describe the rdf:Class for this dataclass
-        >>> @rdf_dataclass(BLARG.MyWord, metadata={
+        decorate a dataclass with `dataclass_metadata` (put it before
+        `@dataclasses.dataclass` so it applies after) and pass twopledict to
+        `metadata` to describe the rdf:Class for this dataclass
+        >>> @dataclass_metadata(metadata={
+        ...     # values for owl:sameAs on the dataclass will be used
+        ...     # as the rdf:type for instances of this dataclass
+        ...     OWL.sameAs: {BLARG.MyWord},
         ...     BLARG.meeble: {BLARG.plo},
         ... })
         ... @dataclasses.dataclass
@@ -1230,27 +1241,52 @@ else:
         >>> sorted(_)
         [('http://blarg.example/vocab/wordWord', 'what'),
          ('http://www.w3.org/2000/01/rdf-schema#comment', 'whomever')]
+        >>> iter_dataclass_class_triples(MyWord)
+        <generator object iter_dataclass_class_triples at 0x...>
+        >>> sorted(_)
         '''
-        def _rdf_dataclass_decorator(cls):
+        def _dataclass_metadata_decorator(cls):
             assert dataclasses.is_dataclass(cls)
             assert cls not in _DATACLASS_METADATA
             _DATACLASS_METADATA[cls] = metadata
-            assert cls not in _DATACLASS_IRIS
-            _DATACLASS_IRIS[cls] = iri
             return cls
-        return _rdf_dataclass_decorator
+        return _dataclass_metadata_decorator
 
-    def tripledict_from_dataclass(datacls) -> RdfTripleDictionary:
-        _tripledict = RdfGraph({})
-        for _triple in iter_dataclass_triples(datacls):
-            _tripledict
-        yield from iter_twoples(get_dataclass_metadata(datacls))
+    def iter_dataclass_twoples(
+        datacls_instance,
+        field_map=None,
+    ) -> Iterable[RdfTwople]:
+        '''
+        >>> _blarg = BlargDataclass(foo='foo', bar='bar')
+        >>> set(iter_dataclass_twoples(_blarg))
+        {(BLARG.foo, 'foo')}
+        >>> sorted(iter_dataclass_twoples(blarg, {'bar': BLARG.barrr}))
+        [
+            (BLARG.barrr, 'bar'),
+            (BLARG.foo, 'foo'),
+        ]
+                )
+                self.assertEqual(
+                    set(iter_dataclass_twoples(blarg, {
+                        'foo': BLARG.fool,
+                        'bar': BLARG.barr,
+                        'baz': BLARG.baz,
+                    })),
+                    {
+                        (BLARG.foo, 'foo'),
+                        (BLARG.fool, 'foo'),
+                        (BLARG.barr, 'bar'),
+                    },
+                )
 
-    def dataclass_from_tripledict(tripledict, datacls):
-        assert dataclasses.is_dataclass(datacls) and isinstance(datacls, type)
-        pass
-
-    def iter_dataclass_twoples(datacls_instance) -> Iterable[RdfTwople]:
+            def test_as_blanknode(self):
+                blarg = BlargDataclass(foo='bloo', bar='blip')
+                actual = dataclass_as_blanknode(blarg, {})
+                self.assertIsInstance(actual, frozenset)
+                self.assertEqual(actual, frozenset((
+                    (BLARG.foo, 'bloo'),
+                )))
+        '''
         assert (
             dataclasses.is_dataclass(datacls_instance)
             and not isinstance(datacls_instance, type)
@@ -1262,6 +1298,11 @@ else:
                 if _field_value is not None:
                     for _field_iri in _field_iris:
                         yield (_field_iri, _field_value)
+        for _field_name, _field_iri in (field_map or {}).items():
+            _field_value = getattr(datacls_instance, _field.name, None)
+            if _field_value is not None:
+                for _field_iri in _field_iris:
+                    yield (_field_iri, _field_value)
 
     def iter_dataclass_class_triples(
         datacls, *,
@@ -1293,54 +1334,9 @@ else:
             iter_dataclass_twoples(dataclass_instance, iri_by_fieldname),
         )
 
-    if __debug__:
-        BLARG = IriNamespace('http://blarg.example/')
-
-        @dataclasses.dataclass
-        class BlargDataclass:
-            foo: str = dataclasses.field(metadata={
-                OWL.sameAs: {BLARG.foo},
-            })
-            bar: str  # unadorned
-
-        class TestBlarg(unittest.TestCase):
-            def test_as_twoples(self):
-                blarg = BlargDataclass(foo='foo', bar='bar')
-                self.assertEqual(
-                    set(iter_dataclass_twoples(blarg, {})),
-                    {(BLARG.foo, 'foo')},
-                )
-                self.assertEqual(
-                    set(iter_dataclass_twoples(blarg, {'bar': BLARG.barrr})),
-                    {
-                        (BLARG.foo, 'foo'),
-                        (BLARG.barrr, 'bar'),
-                    },
-                )
-                self.assertEqual(
-                    set(iter_dataclass_twoples(blarg, {
-                        'foo': BLARG.fool,
-                        'bar': BLARG.barr,
-                        'baz': BLARG.baz,
-                    })),
-                    {
-                        (BLARG.foo, 'foo'),
-                        (BLARG.fool, 'foo'),
-                        (BLARG.barr, 'bar'),
-                    },
-                )
-
-            def test_as_blanknode(self):
-                blarg = BlargDataclass(foo='bloo', bar='blip')
-                actual = dataclass_as_blanknode(blarg, {})
-                self.assertIsInstance(actual, frozenset)
-                self.assertEqual(actual, frozenset((
-                    (BLARG.foo, 'bloo'),
-                )))
-
 
 ###
-# translating to/from rdflib
+# translating to/from rdflib.Graph (and thereby turtle)
 
 try:
     import rdflib
@@ -1359,6 +1355,69 @@ else:
         return _rdflib_graph.serialize(format='turtle')
 
     def rdflib_graph_from_tripledict(tripledict: RdfTripleDictionary):
+        '''
+
+        an rdf graph expressed as primitive tripledict:
+        >>> _graph_as_tripledict = {
+        ...     BLARG.ha: {  # subject
+        ...         BLARG.pa: {  # predicate
+        ...             BLARG.ya,  # objects...
+        ...             BLARG.xa,
+        ...             blanknode({
+        ...                 BLARG.a: {BLARG.b},
+        ...                 BLARG.c: {BLARG.d},
+        ...                 BLARG.e: {
+        ...                     blanknode({BLARG.f: {BLARG.ya}}),
+        ...                 },
+        ...             }),
+        ...         },
+        ...         BLARG.na: {  # predicate
+        ...             BLARG.ya,  # objects...
+        ...         },
+        ...     },
+        ...     BLARG.ya: {  # another subject
+        ...         BLARG.pa: {BLARG.ha},
+        ...         BLARG.ba: {
+        ...             datum('ha pa la xa', language_iri=BLARG.Dunno),
+        ...             datum('naja yaba', language_iri=BLARG.Mystery),
+        ...             datum('basic', language_tag='en'),
+        ...             datum('মৌলিক', language_tag='bn'),
+        ...         },
+        ...     }
+        ... }
+
+        the same graph expressed as turtle:
+        >>> _graph_as_turtle = f"""
+        ...     @prefix blarg: <{str(BLARG)}> .
+        ...     blarg:ha
+        ...         blarg:pa blarg:ya ,
+        ...                  blarg:xa ,
+        ...                  [
+        ...                     blarg:a blarg:b ;
+        ...                     blarg:c blarg:d ;
+        ...                     blarg:e [ blarg:f blarg:ya ] ;
+        ...                  ] ;
+        ...         blarg:na blarg:ja .
+        ...     blarg:ya blarg:ba "ha pa la xa"^^blarg:Dunno ,
+        ...                       "naja yaba"^^blarg:Mystery ,
+        ...                       "basic"@en ,
+        ...                       "মৌলিক"@bn .
+        ... """
+
+        the rdflib translations of those expressions agree:
+        >>> from rdflib.compare import to_isomorphic
+        >>> _from_tripledict = rdflib_graph_from_tripledict(_tripledict)
+        >>> _from_turtle = rdflib.Graph()
+        >>> _from_turtle.parse(format='turtle', data=_graph_as_turtle)
+        >>> to_isomorphic(_from_tripledict) == to_isomorphic(_from_turtle)
+        True
+
+        and may be converted back to tripledict:
+        >>> _td_from_turtle = tripledict_from_rdflib(_from_turtle)
+        >>> _td_from_tripledict = tripledict_from_rdflib(_from_tripledict)
+        >>> _td_from_turtle == _tripledict == _td_from_tripledict
+        True
+        '''
 
         _rdflib_graph = rdflib.Graph()  # TODO: namespace prefixes?
         _blanknode_map = {}
@@ -1379,20 +1438,28 @@ else:
             if isinstance(obj, str):
                 return rdflib.URIRef(obj)
             if isinstance(obj, Datum):
-                _language_iri = obj.language_iri
-                if not _language_iri:  # no language
-                    return rdflib.Literal(obj.unicode_text)
-                if _language_iri in IANA_LANGUAGE:  # standard language
-                    _language_tag = IriNamespace.name(
-                        _language_iri,
-                        namespace=IANA_LANGUAGE,
+                _language_tag_iris = {
+                    _iri
+                    for _iri in obj.language_iris
+                    if _iri in IANA_LANGUAGE
+                }
+                if _language_tag_iris:
+                    return rdflib.Literal(
+                        obj.unicode_text,
+                        lang=IriNamespace.name(
+                            next(iter(_language_tag_iris)),  # choose any one
+                            namespace=IANA_LANGUAGE,
+                        ),
                     )
-                    return rdflib.Literal(obj.unicode_text, lang=_language_tag)
-                # non-standard language (treat as datatype)
-                return rdflib.Literal(
-                    obj.unicode_text,
-                    datatype=rdflib.URIRef(_language_iri),
-                )
+                elif obj.language_iris:  # non-standard language (or datatype)
+                    return rdflib.Literal(
+                        obj.unicode_text,
+                        datatype=rdflib.URIRef(
+                            next(iter(obj.language_iris)),  # choose any one
+                        ),
+                    )
+                else:  # no language or datatype
+                    return rdflib.Literal(obj.unicode_text)
             elif isinstance(obj, (int, float, datetime.date)):
                 return rdflib.Literal(obj)
             elif isinstance(obj, frozenset):
@@ -1417,19 +1484,11 @@ else:
     def tripledict_from_turtle(turtle: str):
         # TODO: without rdflib (should be simpler;
         # turtle already structured like RdfTripleDictionary)
-        try:
-            import rdflib
-        except ImportError:
-            raise Exception('tripledict_from_turtle depends on rdflib')
         _rdflib_graph = rdflib.Graph()
         _rdflib_graph.parse(data=turtle, format='turtle')
         return tripledict_from_rdflib(_rdflib_graph)
 
     def tripledict_from_rdflib(rdflib_graph):
-        try:
-            import rdflib
-        except ImportError:
-            raise Exception('tripledict_from_rdflib depends on rdflib')
         _open_subjects = set()
 
         def _twoples(rdflib_subj) -> Iterable[RdfTwople]:
@@ -1487,71 +1546,17 @@ else:
             )
         return _td_wrapper.tripledict
 
-    if __debug__:
-        class TestRdflib(unittest.TestCase):
-            maxDiff = None
 
-            def test_asfrom_rdflib(self):
-                try:
-                    import rdflib
-                    import rdflib.compare
-                except ImportError:
-                    self.skipTest('cannot import rdflib')
-                _tripledict = {
-                    BLARG.ha: {
-                        BLARG.pa: {
-                            BLARG.la,
-                            BLARG.xa,
-                            frozenset((
-                                (BLARG.a, BLARG.b),
-                                (BLARG.c, BLARG.d),
-                                (BLARG.e, frozenset((
-                                    (BLARG.f, BLARG.g),
-                                ))),
-                            )),
-                        },
-                        BLARG.na: {
-                            BLARG.ja,
-                        },
-                    },
-                    BLARG.ya: {
-                        BLARG.ba: {
-                            datum('ha pa la xa', language_iri=BLARG.Dunno),
-                            datum('naja yaba', language_iri=BLARG.Dunno),
-                            datum('basic', language_tag='en'),
-                            datum('মৌলিক', language_tag='bn'),
-                        },
-                    }
-                }
-                _input_turtle = f'''
-                    @prefix blarg: <{str(BLARG)}> .
+if __debug__:
+    # a nonsense namespace for unknowable language, used in tests
+    BLARG = IriNamespace('http://blarg.example/vocab/')
 
-                    blarg:ha
-                        blarg:pa blarg:la ,
-                                 blarg:xa ,
-                                 [
-                                    blarg:a blarg:b ;
-                                    blarg:c blarg:d ;
-                                    blarg:e [ blarg:f blarg:g ] ;
-                                 ] ;
-                        blarg:na blarg:ja .
-
-                    blarg:ya blarg:ba "ha pa la xa"^^blarg:Dunno ,
-                                      "naja yaba"^^blarg:Dunno ,
-                                      "basic"@en ,
-                                      "মৌলিক"@bn .
-                '''
-                _expected = rdflib.Graph()
-                _expected.parse(format='turtle', data=_input_turtle)
-                _actual = rdflib_graph_from_tripledict(_tripledict)
-                self.assertEqual(
-                    rdflib.compare.to_isomorphic(_actual),
-                    rdflib.compare.to_isomorphic(_expected),
-                )
-                _from_rdflib = tripledict_from_rdflib(_expected)
-                self.assertEqual(_from_rdflib, _tripledict)
-                _from_turtle = tripledict_from_turtle(_input_turtle)
-                self.assertEqual(_from_turtle, _tripledict)
+    @dataclasses.dataclass
+    class BlargDataclass:
+        foo: str = dataclasses.field(metadata={
+            OWL.sameAs: {BLARG.foo},
+        })
+        bar: str  # unadorned
 
 
 ###
