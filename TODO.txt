@@ -1,0 +1,6 @@
+
+- make "gather" a sub-module of "primitive_rdf"
+- quad-dict
+- create checksum-addressed quad-dict from 
+    - <checksum:...> owl:sameAs "{...}"^^rdf:JSON
+

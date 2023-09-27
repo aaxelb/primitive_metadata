@@ -1,5 +1,5 @@
 [project]
-name = "gather"
+name = "primitive_metadata"
 readme = "README.md"
-version = "0.2023.45"
+version = "0.2023.46"
 requires-python = ">=3.7"

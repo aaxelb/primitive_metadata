@@ -1,21 +1,14 @@
-# gather
+# `primitive_metadata`
 > note: unstable and subject to wild change, tho with intent to settle
 
-<blockquote>
-gather (verb)<br>
-    - to collect; normally separate things<br>
-        - to harvest food<br>
-        - to accumulate over time, to amass little by little<br>
-        - to congregate, or assemble<br>
-        - to grow gradually larger by accretion<br>
-    - to bring parts of a whole closer<br>
-    - to infer or conclude; to know from a different source.<br>
-(gathered from https://en.wiktionary.org/wiki/gather )
-</blockquote>
-
-a lil toolset for gathering metadata as rdf triples
+some tools for writing and working with small-ish chunks of metadata
+as [rdf](https://www.w3.org/TR/rdf11-primer/) in [python](https://python.org)
 
 (for python 3.7+)
+
+## `primitive_rdf`
+`primitive_metadata.primitive_rdf` contains suggestions and utilities for expressing
+rdf metadata with (almost entirely) built-in python data structures (`dict` and `set`)
 
 ## running unit tests
 `python3 -m unittest`
