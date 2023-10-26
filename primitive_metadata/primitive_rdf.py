@@ -268,7 +268,7 @@ class Datum(NamedTuple):
     def language_tag(self) -> Optional[str]:
         try:
             return next(
-                IriNamespace.name(_iri, namespace=IANA_LANGUAGE)
+                iri_minus_namespace(_iri, namespace=IANA_LANGUAGE)
                 for _iri in self.language_iris
                 if _iri in IANA_LANGUAGE
             )
@@ -442,7 +442,7 @@ def _enumerate_container(
     _INDEX_NAMESPACE = IriNamespace(RDF['_'])  # rdf:_1, rdf:_2, ...
     for _pred, _obj in bnode:
         try:
-            _index = int(IriNamespace.name(
+            _index = int(iri_minus_namespace(
                 _pred,
                 namespace=_INDEX_NAMESPACE,
             ))
@@ -516,32 +516,6 @@ class IriNamespace:
         )
         self.__namestory = namestory
 
-    @classmethod
-    def name(
-        cls, iri: str, *,
-        namespace: Union[str, 'IriNamespace'],
-    ) -> str:
-        '''get the rest of the iri after its namespace
-
-        >>> IriNamespace.name(BLARG.foo, namespace=BLARG)
-        'foo'
-
-        raises `ValueError` if the iri does not belong to the namespace
-        >>> IriNamespace.name(BLARG.foo, namespace=RDF)
-        Traceback (most recent call last):
-          ...
-        ValueError: "http://blarg.example/vocab/foo" does not start with
-          "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
-        '''
-        namespace_iri = (
-            namespace
-            if isinstance(namespace, str)
-            else namespace.__iri
-        )
-        if not iri.startswith(namespace_iri):
-            raise ValueError(f'"{iri}" does not start with "{namespace_iri}"')
-        return iri[len(namespace_iri):]  # the remainder after the namespace
-
     def __join_name(self, name: str) -> str:
         if (self.__nameset is not None) and (name not in self.__nameset):
             raise ValueError(
@@ -596,6 +570,41 @@ class IriNamespace:
 
     def __hash__(self):
         return hash(self.__iri)
+
+
+def get_namespace_iri(namespace: IriNamespace):
+    '''get the iri for a namespace
+
+    >>> get_namespace_iri(BLARG)
+    'http://blarg.example/vocab/'
+    '''
+    return namespace._IriNamespace__iri
+
+
+def iri_minus_namespace(
+    iri: str, *,
+    namespace: Union[str, 'IriNamespace'],
+) -> str:
+    '''get the rest of the iri after its namespace
+
+    >>> iri_minus_namespace(BLARG.foo, namespace=BLARG)
+    'foo'
+
+    raises `ValueError` if the iri does not belong to the namespace
+    >>> iri_minus_namespace(BLARG.foo, namespace=RDF)
+    Traceback (most recent call last):
+      ...
+    ValueError: "http://blarg.example/vocab/foo" does not start with
+      "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    '''
+    _namespace_iri = (
+        namespace
+        if isinstance(namespace, str)
+        else get_namespace_iri(namespace)
+    )
+    if not iri.startswith(_namespace_iri):
+        raise ValueError(f'"{iri}" does not start with "{_namespace_iri}"')
+    return iri[len(_namespace_iri):]  # the remainder after the namespace
 
 
 ###
@@ -755,7 +764,7 @@ class IriShorthand:
                 else iri.startswith(_long)
             )
             if _is_match:
-                _name = IriNamespace.name(iri, namespace=_long)
+                _name = iri_minus_namespace(iri, namespace=_long)
                 if _name:
                     yield (f'{_short}{self.delimiter}{_name}', _short)
                 else:
@@ -990,7 +999,7 @@ def rdfobject_as_nocontext_jsonld(rdfobj: RdfObject):
         }
         if _language_tag_iris:  # standard language(s)
             _jsonld_obj['@language'] = _json_item_or_list(
-                IriNamespace.name(_iri, namespace=IANA_LANGUAGE)
+                iri_minus_namespace(_iri, namespace=IANA_LANGUAGE)
                 for _iri in _language_tag_iris
             )
         _datatype_iris = {
@@ -1182,7 +1191,7 @@ class JsonldSerializer:
             _datatypes = set()
             for _language_iri in rdfobj.language_iris:
                 if _language_iri in IANA_LANGUAGE:
-                    _lang_tags.add(IriNamespace.name(
+                    _lang_tags.add(iri_minus_namespace(
                         _language_iri,
                         namespace=IANA_LANGUAGE,
                     ))
@@ -1556,7 +1565,7 @@ else:
                 if _language_tag_iris:
                     return rdflib.Literal(
                         obj.unicode_value,
-                        lang=IriNamespace.name(
+                        lang=iri_minus_namespace(
                             next(iter(_language_tag_iris)),  # choose any one
                             namespace=IANA_LANGUAGE,
                         ),
