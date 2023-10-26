@@ -453,6 +453,12 @@ def _enumerate_container(
 
 
 ###
+# a tuple of names of increasing length (TODO: validate, use)
+# choose which name to use based on the space available
+Namestory = tuple['Datum', ...]
+
+
+###
 # for using iris without having to type out full iris
 class IriNamespace:
     '''IriNamespace: the set of all possible names which begin with a given iri
@@ -496,6 +502,7 @@ class IriNamespace:
     def __init__(
         self, iri: str, *,
         nameset: Optional[set[str]] = None,
+        namestory: Optional[Namestory] = None,
     ):
         # TODO: namespace metadata/definition
         if ':' not in iri:
@@ -507,6 +514,7 @@ class IriNamespace:
             if nameset is not None
             else None
         )
+        self.__namestory = namestory
 
     @classmethod
     def name(
