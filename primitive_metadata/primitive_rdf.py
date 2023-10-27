@@ -22,8 +22,9 @@ RdfObject = Union[  # the object of relation may be any of:
     str,             # iri string for another something
     int, float,      # immutable python primitives
     datetime.date,   # date and datetime, too
-    'Datum',         # namedtuple for explicit rdf literals
     'RdfBlanknode',  # frozenset for blank nodes (acyclic)
+    'Datum',         # namedtuple for explicit rdf literals
+    'QuotedTriple',  # namedtuple for explicit rdf tryples
 ]
 RdfTwople = tuple[RdfPredicate, RdfObject]
 RdfTriple = tuple[RdfSubject, RdfPredicate, RdfObject]
@@ -257,8 +258,8 @@ def choose_one_iri(iris: Iterable[str]):
 class Datum(NamedTuple):
     unicode_value: str  # an rdf value serialized to unicode string
     language_iris: frozenset[str]  # iris for any languages, codebooks,
-    #                            thesauruseseses, datatypes, or web
-    #                            links that help read the value str
+    #                                thesauruseseses, datatypes, or web
+    #                                links that help read the value str
     # (if you wish to constrain to IETF language tags
     # in https://www.rfc-editor.org/rfc/bcp/bcp47.txt
     # use the `datum` helper with `language_tag` param
@@ -355,7 +356,18 @@ def datum(
     )
 
 
-def container(container_type: str, items: Iterable[RdfObject]) -> RdfBlanknode:
+class QuotedTriple(NamedTuple):
+    subj: RdfSubject
+    pred: RdfPredicate
+    obj: RdfObject
+
+
+def container(
+    container_type: str,
+    items: Iterable[RdfObject],
+    *,
+    with_twoples: Iterable[RdfTwople] = (),
+) -> RdfBlanknode:
     '''
     >>> _bag = container(RDF.Bag, [11,12,13])
     >>> type(_bag) is frozenset and _bag == {
@@ -376,6 +388,7 @@ def container(container_type: str, items: Iterable[RdfObject]) -> RdfBlanknode:
     return frozenset((
         (RDF.type, container_type),
         *_indexed_twoples,
+        *with_twoples,
     ))
 
 
@@ -400,7 +413,10 @@ def is_container(bnode: RdfBlanknode) -> bool:
     )
 
 
-def sequence(items: Iterable[RdfObject]) -> RdfBlanknode:
+def sequence(
+    items: Iterable[RdfObject], *,
+    with_twoples: Iterable[RdfTwople] = (),
+) -> RdfBlanknode:
     '''
     >>> sequence([3,2,1]) == frozenset((
     ...     (RDF.type, RDF.Seq),
@@ -410,7 +426,7 @@ def sequence(items: Iterable[RdfObject]) -> RdfBlanknode:
     ... ))
     True
     '''
-    return container(RDF.Seq, items)
+    return container(RDF.Seq, items, with_twoples=with_twoples)
 
 
 def sequence_objects_in_order(seq: RdfBlanknode) -> Iterable[RdfObject]:
@@ -1027,6 +1043,7 @@ def rdfobject_as_nocontext_jsonld(rdfobj: RdfObject):
         return twopledict_as_nocontext_jsonld(
             twopledict_from_twopleset(rdfobj),
         )
+    # TODO: QuotedTriple
     raise ValueError(f'expected RdfObject, got {rdfobj}')
 
 
@@ -1202,6 +1219,7 @@ class JsonldSerializer:
             if _datatypes:
                 _jsonld_obj['@type'] = _json_item_or_list(_datatypes)
             return _jsonld_obj
+        # TODO: QuotedTriple
         raise ValueError(f'expected RdfObject, got {rdfobj}')
 
     ###
@@ -1590,6 +1608,7 @@ else:
                 for _pred, _obj in obj:
                     _add_to_rdflib_graph(_bnode, rdflib.URIRef(_pred), _obj)
                 return _bnode
+            # TODO: QuotedTriple
             raise ValueError(f'expected RdfObject, got {obj}')
 
         for (_subj, _pred, _obj) in iter_tripleset(tripledict):
