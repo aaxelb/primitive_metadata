@@ -23,8 +23,8 @@ RdfObject = Union[  # the object of relation may be any of:
     int, float,      # immutable python primitives
     datetime.date,   # date and datetime, too
     'RdfBlanknode',  # frozenset for blank nodes (acyclic)
-    'Datum',         # namedtuple for explicit rdf literals
-    'QuotedTriple',  # namedtuple for explicit rdf tryples
+    'Literal',       # namedtuple for explicit rdf literals
+    'QuotedTriple',  # namedtuple for quoted rdf triples
 ]
 RdfTwople = tuple[RdfPredicate, RdfObject]
 RdfTriple = tuple[RdfSubject, RdfPredicate, RdfObject]
@@ -255,14 +255,14 @@ def choose_one_iri(iris: Iterable[str]):
     return min(iris, key=lambda iri: (len(iri), iri))
 
 
-class Datum(NamedTuple):
+class Literal(NamedTuple):
     unicode_value: str  # an rdf value serialized to unicode string
     language_iris: frozenset[str]  # iris for any languages, codebooks,
     #                                thesauruseseses, datatypes, or web
     #                                links that help read the value str
     # (if you wish to constrain to IETF language tags
     # in https://www.rfc-editor.org/rfc/bcp/bcp47.txt
-    # use the `datum` helper with `language_tag` param
+    # use the helper `literal(.., language_tag='..')`
     # or an iri within the `IANA_LANGUAGE` namespace)
 
     @property
@@ -284,53 +284,53 @@ class Datum(NamedTuple):
         return choose_one_iri(self.language_iris)
 
 
-def datum(
-    primitive_datum: Union[str, int, float, datetime.date, None], *,
+def literal(
+    primitive_value: Union[str, int, float, datetime.date, None], *,
     language_iris: Union[str, Iterable[str]] = (),
     language_tag=None,
-) -> Union[Datum, None]:
-    '''convenience wrapper for Datum
+) -> Union[Literal, None]:
+    '''convenience wrapper for Literal
 
-    >>> datum('blurbl di blarbl da', language_iris={BLARG.my_language})
-    Datum(unicode_value='blurbl di blarbl da',
+    >>> literal('blurbl di blarbl da', language_iris={BLARG.my_language})
+    Literal(unicode_value='blurbl di blarbl da',
           language_iris=frozenset({'http://blarg.example/vocab/my_language'}))
-    >>> datum(7)
-    Datum(unicode_value='7',
+    >>> literal(7)
+    Literal(unicode_value='7',
         language_iris=frozenset({'http://www.w3.org/2001/XMLSchema#integer'}))
-    >>> datum(datetime.date(1111, 11, 11))
-    Datum(unicode_value='1111-11-11',
+    >>> literal(datetime.date(1111, 11, 11))
+    Literal(unicode_value='1111-11-11',
         language_iris=frozenset({'http://www.w3.org/2001/XMLSchema#date'}))
-    >>> datum('hello', language_tag='en')
-    Datum(unicode_value='hello',
+    >>> literal('hello', language_tag='en')
+    Literal(unicode_value='hello',
         language_iris=frozenset({'https://www.iana.org/assignments/language-subtag-registry#en'}))
 
 
     returns None for empty values:
-    >>> datum(None)
-    >>> datum('')
-    >>> datum('', language_tag='foo')
+    >>> literal(None)
+    >>> literal('')
+    >>> literal('', language_tag='foo')
     '''
-    if primitive_datum is None:
+    if primitive_value is None:
         return None
-    _str_datum = None
+    _str_value = None
     _implied_datatype = None
-    if isinstance(primitive_datum, str):
-        _str_datum = primitive_datum
-    elif isinstance(primitive_datum, int):
-        _str_datum = str(primitive_datum)
+    if isinstance(primitive_value, str):
+        _str_value = primitive_value
+    elif isinstance(primitive_value, int):
+        _str_value = str(primitive_value)
         _implied_datatype = XSD.integer
-    elif isinstance(primitive_datum, float):
-        _str_datum = str(primitive_datum)  # fits with xsd:float definition
+    elif isinstance(primitive_value, float):
+        _str_value = str(primitive_value)  # fits with xsd:float definition
         _implied_datatype = XSD.float
-    elif isinstance(primitive_datum, datetime.datetime):
-        _str_datum = primitive_datum.isoformat()
+    elif isinstance(primitive_value, datetime.datetime):
+        _str_value = primitive_value.isoformat()
         _implied_datatype = XSD.dateTime
-    elif isinstance(primitive_datum, datetime.date):
-        _str_datum = primitive_datum.isoformat()
+    elif isinstance(primitive_value, datetime.date):
+        _str_value = primitive_value.isoformat()
         _implied_datatype = XSD.date
     else:
-        raise ValueError(f'expected RdfObject, got {primitive_datum}')
-    if not _str_datum:
+        raise ValueError(f'expected RdfObject, got {primitive_value}')
+    if not _str_value:
         return None
 
     def _iter_one_or_many(items) -> Iterable[str]:
@@ -350,8 +350,8 @@ def datum(
         if _implied_datatype is not None:
             yield _implied_datatype
 
-    return Datum(
-        unicode_value=_str_datum,
+    return Literal(
+        unicode_value=_str_value,
         language_iris=frozenset(_iter_language_iris()),
     )
 
@@ -471,7 +471,7 @@ def _enumerate_container(
 ###
 # a tuple of names of increasing length (TODO: validate, use)
 # choose which name to use based on the space available
-Namestory = tuple['Datum', ...]
+Namestory = tuple['Literal', ...]
 
 
 ###
@@ -630,7 +630,7 @@ RDFS = IriNamespace('http://www.w3.org/2000/01/rdf-schema#')
 OWL = IriNamespace('http://www.w3.org/2002/07/owl#')
 XSD = IriNamespace('http://www.w3.org/2001/XMLSchema#')
 
-# `Datum` has a set of iris to identify language;
+# `Literal` can have many iris for language/type;
 # here is a probably-reliable way to express IETF
 # language tags in iri form (TODO: consider using
 # id.loc.gov instead? is authority for ISO 639-1,
@@ -642,9 +642,9 @@ IANA_LANGUAGE_REGISTRY_IRI = (
 IANA_LANGUAGE = IriNamespace(
     f'{IANA_LANGUAGE_REGISTRY_IRI}#',
     namestory=lambda: (
-        datum('language', language_tag='en'),
-        datum('language tag', language_tag='en'),
-        datum((
+        literal('language', language_tag='en'),
+        literal('language tag', language_tag='en'),
+        literal((
             'a "language tag" (as used by RDF and defined by IETF'
             ' in BCP 47 (https://www.ietf.org/rfc/bcp/bcp47.txt))'
             ' is a hyphen-delimited list of "subtags", where each'
@@ -1006,7 +1006,7 @@ def rdfobject_as_nocontext_jsonld(rdfobj: RdfObject):
     '''
     if isinstance(rdfobj, str):
         return {'@id': rdfobj}
-    if isinstance(rdfobj, Datum):
+    if isinstance(rdfobj, Literal):
         _jsonld_obj = {'@value': rdfobj.unicode_value}
         _language_tag_iris = {
             _iri
@@ -1089,14 +1089,14 @@ def rdfobject_from_nocontext_jsonld(jsonld_obj: dict):
             return _value
         _language_tag = jsonld_obj.get('@language')
         if _language_tag:
-            return datum(_value, language_tag=_language_tag)
+            return literal(_value, language_tag=_language_tag)
         _type_iri = jsonld_obj.get('@type')
         if _type_iri == XSD.date:
             return datetime.date.fromisoformat(_value)  # python 3.7+
         if _type_iri == XSD.dateTime:
             return datetime.datetime.fromisoformat(_value)  # python 3.7+
         if _type_iri:
-            return datum(_value, language_iris=_type_iri)
+            return literal(_value, language_iris=_type_iri)
     # if no '@id' or '@value', treat as blank node
     return twopledict_from_nocontext_jsonld(jsonld_obj)
 
@@ -1202,7 +1202,7 @@ class JsonldSerializer:
             return {'@id': self.shorthand.compact_iri(rdfobj)}
         if isinstance(rdfobj, frozenset):  # blank (no iri)
             return self.twopledict_as_jsonld(twopledict_from_twopleset(rdfobj))
-        if isinstance(rdfobj, Datum):  # literal
+        if isinstance(rdfobj, Literal):
             _jsonld_obj = {'@value': rdfobj.unicode_value}
             _lang_tags = set()
             _datatypes = set()
@@ -1265,12 +1265,12 @@ class JsonldSerializer:
         if '@id' in jsonld_obj:
             return self.shorthand.expand_iri(jsonld_obj['@id'])
         if '@value' in jsonld_obj:
-            _datum_kwargs = {}
+            _literal_kwargs = {}
             if '@language' in jsonld_obj:
-                _datum_kwargs['language_tag'] = jsonld_obj['@language']
+                _literal_kwargs['language_tag'] = jsonld_obj['@language']
             if '@type' in jsonld_obj:
-                _datum_kwargs['language_iris'] = jsonld_obj['@type']
-            return datum(jsonld_obj['@value'], **_datum_kwargs)
+                _literal_kwargs['language_iris'] = jsonld_obj['@type']
+            return literal(jsonld_obj['@value'], **_literal_kwargs)
         # TODO: support primitive json types?
         raise ValueError(f'unrecognized rdf object: {jsonld_obj}')
 
@@ -1514,10 +1514,10 @@ else:
         ...     BLARG.ya: {  # another subject
         ...         BLARG.pa: {BLARG.ha},
         ...         BLARG.ba: {
-        ...             datum('ha pa la xa', language_iris=BLARG.Dunno),
-        ...             datum('naja yaba', language_iris=BLARG.Mystery),
-        ...             datum('basic', language_tag='en'),
-        ...             datum('মৌলিক', language_tag='bn'),
+        ...             literal('ha pa la xa', language_iris=BLARG.Dunno),
+        ...             literal('naja yaba', language_iris=BLARG.Mystery),
+        ...             literal('basic', language_tag='en'),
+        ...             literal('মৌলিক', language_tag='bn'),
         ...         },
         ...     }
         ... }
@@ -1574,7 +1574,7 @@ else:
         def _simple_rdflib_obj(obj: RdfObject):
             if isinstance(obj, str):
                 return rdflib.URIRef(obj)
-            if isinstance(obj, Datum):
+            if isinstance(obj, Literal):
                 _language_tag_iris = {
                     _iri
                     for _iri in obj.language_iris
@@ -1656,7 +1656,7 @@ else:
                 return frozenset(_twoples(rdflib_obj))
             if isinstance(rdflib_obj, rdflib.Literal):
                 if rdflib_obj.language:
-                    return datum(
+                    return literal(
                         str(rdflib_obj),
                         language_tag=rdflib_obj.language,
                     )
@@ -1664,11 +1664,11 @@ else:
                 if isinstance(_as_python, (int, float, datetime.date)):
                     return _as_python
                 if rdflib_obj.datatype:
-                    return datum(
+                    return literal(
                         str(rdflib_obj),
                         language_iris=str(rdflib_obj.datatype),
                     )
-                return datum(str(rdflib_obj.value))
+                return literal(str(rdflib_obj.value))
             raise ValueError(f'how obj? ({rdflib_obj})')
 
         _td_wrapper = RdfGraph({})
