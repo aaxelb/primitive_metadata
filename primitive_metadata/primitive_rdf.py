@@ -301,17 +301,20 @@ def literal(
     >>> literal(datetime.date(1111, 11, 11))
     Literal(unicode_value='1111-11-11',
         datatype_iris=frozenset({'http://www.w3.org/2001/XMLSchema#date'}))
-    >>> literal('hello', language_tag='en')
-    Literal(unicode_value='hello',
-        datatype_iris=frozenset({'https://www.iana.org/assignments/language-subtag-registry#en'}))
     >>> literal('hello', mediatype='text/plain;charset=utf-8')
     Literal(unicode_value='hello',
         datatype_iris=frozenset({'https://www.iana.org/assignments/media-types/text/plain#charset=utf-8'}))
+    >>> literal('hello', language_tag='es').datatype_iris == {
+    ...     RDF.langString,
+    ...     IANA_LANGUAGE['es'],
+    ... }
+    True
     >>> literal(
     ...    '¿porque no los dos?',
     ...    language_tag='es',
     ...    mediatype='text/plain;charset=utf-8',
     ... ).datatype_iris == {
+    ...     RDF.langString,
     ...     IANA_LANGUAGE['es'],
     ...     IANA_MEDIATYPE['text/plain#charset=utf-8'],
     ... }
