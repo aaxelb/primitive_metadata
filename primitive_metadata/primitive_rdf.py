@@ -257,7 +257,7 @@ def choose_one_iri(iris: Iterable[str]):
 
 class Literal(NamedTuple):
     unicode_value: str  # an rdf value serialized to unicode string
-    language_iris: frozenset[str]  # iris for any languages, codebooks,
+    datatype_iris: frozenset[str]  # iris for any languages, codebooks,
     #                                thesauruseseses, datatypes, or web
     #                                links that help read the value str
     # (if you wish to constrain to IETF language tags
@@ -270,7 +270,7 @@ class Literal(NamedTuple):
         try:
             return next(
                 iri_minus_namespace(_iri, namespace=IANA_LANGUAGE)
-                for _iri in self.language_iris
+                for _iri in self.datatype_iris
                 if _iri in IANA_LANGUAGE
             )
         except StopIteration:
@@ -279,39 +279,39 @@ class Literal(NamedTuple):
     def single_datatype(self) -> str:
         if self.language_tag is not None:
             return RDF.langString
-        if not self.language_iris:
+        if not self.datatype_iris:
             return RDF.string
-        return choose_one_iri(self.language_iris)
+        return choose_one_iri(self.datatype_iris)
 
 
 def literal(
     primitive_value: Union[str, int, float, datetime.date, None], *,
-    language_iris: Union[str, Iterable[str]] = (),
-    language_tag=None,  # adds an IANA_LANGUAGE iri to language_iris
-    mediatype=None,  # adds a IANA_MEDIATYPE iri to language_iris
+    datatype_iris: Union[str, Iterable[str]] = (),
+    language_tag=None,  # adds an IANA_LANGUAGE iri to datatype_iris
+    mediatype=None,  # adds a IANA_MEDIATYPE iri to datatype_iris
 ) -> Union[Literal, None]:
     '''convenience wrapper for Literal
 
-    >>> literal('blurbl di blarbl da', language_iris={BLARG.my_language})
+    >>> literal('blurbl di blarbl da', datatype_iris={BLARG.my_language})
     Literal(unicode_value='blurbl di blarbl da',
-          language_iris=frozenset({'http://blarg.example/vocab/my_language'}))
+          datatype_iris=frozenset({'http://blarg.example/vocab/my_language'}))
     >>> literal(7)
     Literal(unicode_value='7',
-        language_iris=frozenset({'http://www.w3.org/2001/XMLSchema#integer'}))
+        datatype_iris=frozenset({'http://www.w3.org/2001/XMLSchema#integer'}))
     >>> literal(datetime.date(1111, 11, 11))
     Literal(unicode_value='1111-11-11',
-        language_iris=frozenset({'http://www.w3.org/2001/XMLSchema#date'}))
+        datatype_iris=frozenset({'http://www.w3.org/2001/XMLSchema#date'}))
     >>> literal('hello', language_tag='en')
     Literal(unicode_value='hello',
-        language_iris=frozenset({'https://www.iana.org/assignments/language-subtag-registry#en'}))
+        datatype_iris=frozenset({'https://www.iana.org/assignments/language-subtag-registry#en'}))
     >>> literal('hello', mediatype='text/plain;charset=utf-8')
     Literal(unicode_value='hello',
-        language_iris=frozenset({'https://www.iana.org/assignments/media-types/text/plain#charset=utf-8'}))
+        datatype_iris=frozenset({'https://www.iana.org/assignments/media-types/text/plain#charset=utf-8'}))
     >>> literal(
     ...    '¿porque no los dos?',
     ...    language_tag='es',
     ...    mediatype='text/plain;charset=utf-8',
-    ... ).language_iris == {
+    ... ).datatype_iris == {
     ...     IANA_LANGUAGE['es'],
     ...     IANA_MEDIATYPE['text/plain#charset=utf-8'],
     ... }
@@ -328,6 +328,10 @@ def literal(
     _implied_datatype = None
     if isinstance(primitive_value, str):
         _str_value = primitive_value
+        if language_tag:
+            _implied_datatype = RDF.langString
+        elif not datatype_iris and not mediatype:
+            _implied_datatype = RDF.string
     elif isinstance(primitive_value, int):
         _str_value = str(primitive_value)
         _implied_datatype = XSD.integer
@@ -355,8 +359,8 @@ def literal(
             except TypeError:
                 pass  # not str or iterable; ignore
 
-    def _iter_language_iris() -> Iterable[str]:
-        yield from _iter_one_or_many(language_iris)
+    def _iter_datatype_iris() -> Iterable[str]:
+        yield from _iter_one_or_many(datatype_iris)
         for _tag in _iter_one_or_many(language_tag):
             yield IANA_LANGUAGE[_tag]
         for _mediatype in _iter_one_or_many(mediatype):
@@ -366,7 +370,7 @@ def literal(
 
     return Literal(
         unicode_value=_str_value,
-        language_iris=frozenset(_iter_language_iris()),
+        datatype_iris=frozenset(_iter_datatype_iris()),
     )
 
 
@@ -1082,7 +1086,7 @@ def rdfobject_as_nocontext_jsonld(rdfobj: RdfObject):
         _jsonld_obj = {'@value': rdfobj.unicode_value}
         _language_tag_iris = {
             _iri
-            for _iri in rdfobj.language_iris
+            for _iri in rdfobj.datatype_iris
             if _iri in IANA_LANGUAGE
         }
         if _language_tag_iris:  # standard language(s)
@@ -1092,7 +1096,7 @@ def rdfobject_as_nocontext_jsonld(rdfobj: RdfObject):
             )
         _datatype_iris = {
             _iri
-            for _iri in rdfobj.language_iris
+            for _iri in rdfobj.datatype_iris
             if _iri not in IANA_LANGUAGE
         }
         if _datatype_iris:  # datatype or non-standard language
@@ -1168,7 +1172,7 @@ def rdfobject_from_nocontext_jsonld(jsonld_obj: dict):
         if _type_iri == XSD.dateTime:
             return datetime.datetime.fromisoformat(_value)  # python 3.7+
         if _type_iri:
-            return literal(_value, language_iris=_type_iri)
+            return literal(_value, datatype_iris=_type_iri)
     # if no '@id' or '@value', treat as blank node
     return twopledict_from_nocontext_jsonld(jsonld_obj)
 
@@ -1278,7 +1282,7 @@ class JsonldSerializer:
             _jsonld_obj = {'@value': rdfobj.unicode_value}
             _lang_tags = set()
             _datatypes = set()
-            for _language_iri in rdfobj.language_iris:
+            for _language_iri in rdfobj.datatype_iris:
                 if _language_iri in IANA_LANGUAGE:
                     _lang_tags.add(iri_minus_namespace(
                         _language_iri,
@@ -1341,7 +1345,7 @@ class JsonldSerializer:
             if '@language' in jsonld_obj:
                 _literal_kwargs['language_tag'] = jsonld_obj['@language']
             if '@type' in jsonld_obj:
-                _literal_kwargs['language_iris'] = jsonld_obj['@type']
+                _literal_kwargs['datatype_iris'] = jsonld_obj['@type']
             return literal(jsonld_obj['@value'], **_literal_kwargs)
         # TODO: support primitive json types?
         raise ValueError(f'unrecognized rdf object: {jsonld_obj}')
@@ -1586,8 +1590,8 @@ else:
         ...     BLARG.ya: {  # another subject
         ...         BLARG.pa: {BLARG.ha},
         ...         BLARG.ba: {
-        ...             literal('ha pa la xa', language_iris=BLARG.Dunno),
-        ...             literal('naja yaba', language_iris=BLARG.Mystery),
+        ...             literal('ha pa la xa', datatype_iris=BLARG.Dunno),
+        ...             literal('naja yaba', datatype_iris=BLARG.Mystery),
         ...             literal('basic', language_tag='en'),
         ...             literal('মৌলিক', language_tag='bn'),
         ...         },
@@ -1649,7 +1653,7 @@ else:
             if isinstance(obj, Literal):
                 _language_tag_iris = {
                     _iri
-                    for _iri in obj.language_iris
+                    for _iri in obj.datatype_iris
                     if _iri in IANA_LANGUAGE
                 }
                 if _language_tag_iris:
@@ -1660,11 +1664,11 @@ else:
                             namespace=IANA_LANGUAGE,
                         ),
                     )
-                elif obj.language_iris:  # non-standard language (or datatype)
+                elif obj.datatype_iris:  # non-standard language (or datatype)
                     return rdflib.Literal(
                         obj.unicode_value,
                         datatype=rdflib.URIRef(
-                            next(iter(obj.language_iris)),  # choose any one
+                            next(iter(obj.datatype_iris)),  # choose any one
                         ),
                     )
                 else:  # no language or datatype
@@ -1738,7 +1742,7 @@ else:
                 if rdflib_obj.datatype:
                     return literal(
                         str(rdflib_obj),
-                        language_iris=str(rdflib_obj.datatype),
+                        datatype_iris=str(rdflib_obj.datatype),
                     )
                 return literal(str(rdflib_obj.value))
             raise ValueError(f'how obj? ({rdflib_obj})')
