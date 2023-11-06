@@ -306,12 +306,15 @@ def literal(
         language_iris=frozenset({'https://www.iana.org/assignments/language-subtag-registry#en'}))
     >>> literal('hello', mediatype='text/plain;charset=utf-8')
     Literal(unicode_value='hello',
-        language_iris=frozenset({'https://www.iana.org/assignments/media-types/text/plain;charset=utf-8'}))
+        language_iris=frozenset({'https://www.iana.org/assignments/media-types/text/plain#charset=utf-8'}))
     >>> literal(
     ...    '¿porque no los dos?',
     ...    language_tag='es',
     ...    mediatype='text/plain;charset=utf-8',
-    ... ).language_iris == {IANA_LANGUAGE['es'], IANA_MEDIATYPE['text/plain#charset=utf-8']}
+    ... ).language_iris == {
+    ...     IANA_LANGUAGE['es'],
+    ...     IANA_MEDIATYPE['text/plain#charset=utf-8'],
+    ... }
     True
 
     returns None for empty values:
@@ -357,7 +360,7 @@ def literal(
         for _tag in _iter_one_or_many(language_tag):
             yield IANA_LANGUAGE[_tag]
         for _mediatype in _iter_one_or_many(mediatype):
-            yield IANA_MEDIATYPE[_mediatype]
+            yield iri_from_mediatype(_mediatype)
         if _implied_datatype is not None:
             yield _implied_datatype
 
@@ -521,9 +524,9 @@ class IriNamespace:
     'http://blarg.example/vocab/subvocab#🦎'
     >>> _subvocab['🦎🦎🦎🦎🦎']
     'http://blarg.example/vocab/subvocab#🦎🦎🦎🦎🦎'
-    >>> BLARG['subvocab#':'🦎'] == _subvocab['🦎']
+    >>> BLARG['subvocab#', '🦎'] == _subvocab['🦎']
     True
-    >>> BLARG['another/':'subvocab#':'🦎']
+    >>> BLARG['another/', 'subvocab#', '🦎']
     'http://blarg.example/vocab/another/subvocab#🦎'
     '''
     def __init__(
@@ -551,7 +554,7 @@ class IriNamespace:
             )
         return ''.join((self.__iri, name))  # TODO: urlencode name
 
-    def __getitem__(self, *names) -> str:
+    def __getitem__(self, names) -> str:
         '''IriNamespace.__getitem__: build iri with `SQUARE['bracket']` syntax
 
         >>> BLARG['blah']
@@ -563,7 +566,11 @@ class IriNamespace:
         >>> BLARG['blah/', 'blum#', 'blee']
         'http://blarg.example/vocab/blah/blum#blee'
         '''
-        return self.__join_name(''.join(names))
+        return (
+            self.__join_name(names)
+            if isinstance(names, str)
+            else self.__join_name(''.join(names))
+        )
 
     def __getattr__(self, attrname: str) -> str:
         '''IriNamespace.__getattr__: build iri with `DOT.dot` syntax
