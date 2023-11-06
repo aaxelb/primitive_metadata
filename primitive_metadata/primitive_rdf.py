@@ -287,7 +287,8 @@ class Literal(NamedTuple):
 def literal(
     primitive_value: Union[str, int, float, datetime.date, None], *,
     language_iris: Union[str, Iterable[str]] = (),
-    language_tag=None,
+    language_tag=None,  # adds an IANA_LANGUAGE iri to language_iris
+    mediatype=None,  # adds a IANA_MEDIATYPE iri to language_iris
 ) -> Union[Literal, None]:
     '''convenience wrapper for Literal
 
@@ -303,7 +304,15 @@ def literal(
     >>> literal('hello', language_tag='en')
     Literal(unicode_value='hello',
         language_iris=frozenset({'https://www.iana.org/assignments/language-subtag-registry#en'}))
-
+    >>> literal('hello', mediatype='text/plain;charset=utf-8')
+    Literal(unicode_value='hello',
+        language_iris=frozenset({'https://www.iana.org/assignments/media-types/text/plain;charset=utf-8'}))
+    >>> literal(
+    ...    '¿porque no los dos?',
+    ...    language_tag='es',
+    ...    mediatype='text/plain;charset=utf-8',
+    ... ).language_iris == {IANA_LANGUAGE['es'], IANA_MEDIATYPE['text/plain#charset=utf-8']}
+    True
 
     returns None for empty values:
     >>> literal(None)
@@ -333,7 +342,7 @@ def literal(
     if not _str_value:
         return None
 
-    def _iter_one_or_many(items) -> Iterable[str]:
+    def _iter_one_or_many(items) -> Iterable:
         if isinstance(items, str):
             yield items
         else:
@@ -343,10 +352,12 @@ def literal(
             except TypeError:
                 pass  # not str or iterable; ignore
 
-    def _iter_language_iris():
+    def _iter_language_iris() -> Iterable[str]:
         yield from _iter_one_or_many(language_iris)
         for _tag in _iter_one_or_many(language_tag):
             yield IANA_LANGUAGE[_tag]
+        for _mediatype in _iter_one_or_many(mediatype):
+            yield IANA_MEDIATYPE[_mediatype]
         if _implied_datatype is not None:
             yield _implied_datatype
 
@@ -540,28 +551,19 @@ class IriNamespace:
             )
         return ''.join((self.__iri, name))  # TODO: urlencode name
 
-    def __getitem__(self, name_or_slice) -> str:
+    def __getitem__(self, *names) -> str:
         '''IriNamespace.__getitem__: build iri with `SQUARE['bracket']` syntax
 
         >>> BLARG['blah']
         'http://blarg.example/vocab/blah'
 
-        use "slice" syntax to support variable namespaces within namespaces;
-        up to three parts separated by colons will be concatenated:
-        >>> BLARG['blah/':'blum#']
+        concatenates multiple args (like for namespaces within namespaces)
+        >>> BLARG['blah/', 'blum#']
         'http://blarg.example/vocab/blah/blum#'
-        >>> BLARG['blah/':'blum#':'blee']
+        >>> BLARG['blah/', 'blum#', 'blee']
         'http://blarg.example/vocab/blah/blum#blee'
         '''
-        if isinstance(name_or_slice, slice):
-            name = ''.join(filter(None, (
-                name_or_slice.start,
-                name_or_slice.stop,
-                name_or_slice.step,
-            )))
-        else:
-            name = name_or_slice
-        return self.__join_name(name)
+        return self.__join_name(''.join(names))
 
     def __getattr__(self, attrname: str) -> str:
         '''IriNamespace.__getattr__: build iri with `DOT.dot` syntax
@@ -598,16 +600,16 @@ def get_namespace_iri(namespace: IriNamespace):
 
 
 def iri_minus_namespace(
-    iri: str, *,
+    iri: str,
     namespace: Union[str, 'IriNamespace'],
 ) -> str:
     '''get the rest of the iri after its namespace
 
-    >>> iri_minus_namespace(BLARG.foo, namespace=BLARG)
+    >>> iri_minus_namespace(BLARG.foo, BLARG)
     'foo'
 
     raises `ValueError` if the iri does not belong to the namespace
-    >>> iri_minus_namespace(BLARG.foo, namespace=RDF)
+    >>> iri_minus_namespace(BLARG.foo, RDF)
     Traceback (most recent call last):
       ...
     ValueError: "http://blarg.example/vocab/foo" does not start with
@@ -636,11 +638,8 @@ XSD = IriNamespace('http://www.w3.org/2001/XMLSchema#')
 # id.loc.gov instead? is authority for ISO 639-1,
 # ISO 639-2; is intended for linked-data context;
 # but is only a subset of valid IETF BCP 47 tags)
-IANA_LANGUAGE_REGISTRY_IRI = (
-    'https://www.iana.org/assignments/language-subtag-registry'
-)
 IANA_LANGUAGE = IriNamespace(
-    f'{IANA_LANGUAGE_REGISTRY_IRI}#',
+    'https://www.iana.org/assignments/language-subtag-registry#',
     namestory=lambda: (
         literal('language', language_tag='en'),
         literal('language tag', language_tag='en'),
@@ -657,6 +656,70 @@ IANA_LANGUAGE = IriNamespace(
     ),
 )
 
+# another IANA-based probably-reliable namespace:
+IANA_MEDIATYPE = IriNamespace(
+    'https://www.iana.org/assignments/media-types/',
+    namestory=lambda: (
+        literal('mediatype', language_tag='en'),
+        literal(
+            'an IRI namespace for media-types (without parameters)',
+            language_tag='en',
+        ),
+        literal((
+            'if a literal conforms to a media type (aka "MIME type"'
+            ' or "Content-Type") could use an iri in this namespace'
+            ' namespace as a datatype/language iri -- '
+            ' for media types that do not require parameters to use'
+            ' utf-8 (since rdf literals in lexical form are utf-8).'
+            ' for example, IANA_MEDIATYPE["text/turtle"]'
+        ), language_tag='en'),
+    ),
+)
+
+
+def iri_from_mediatype(mediatype: str) -> str:
+    '''build an iri for the given mediatype
+
+    mediatype parameters (e.g. "; charset=utf-8") are put in the iri fragment,
+    so the iri can be used to locate the iana mediatype registration (usually)
+
+    >>> iri_from_mediatype('text/turtle')
+    'https://www.iana.org/assignments/media-types/text/turtle'
+    >>> iri_from_mediatype('text/markdown; charset=utf-8')
+    'https://www.iana.org/assignments/media-types/text/markdown#charset=utf-8'
+
+    note that equivalent mediatypes may be expressed multiple ways -- this iri
+    is specific to how the given mediatype was expressed, including parameter
+    ordering, quotes, and spaces
+    '''
+    _typename, _, _parameters = mediatype.partition(';')
+    return (
+        IANA_MEDIATYPE[_typename.strip(), '#', _parameters.strip()]
+        if _parameters
+        else IANA_MEDIATYPE[_typename.strip()]
+    )
+
+
+def mediatype_from_iri(iri: str) -> str:
+    '''get a mediatype from the given iri (assumed to be from IANA_MEDIATYPE)
+
+    reverses the behavior of `iri_from_mediatype`:  the iri fragment, if any,
+    is assumed to be mediatype parameters and will be appended after ';'
+
+    >>> mediatype_from_iri(IANA_MEDIATYPE['text/turtle'])
+    'text/turtle'
+    >>> mediatype_from_iri(IANA_MEDIATYPE['text/markdown#charset=utf-8'])
+    'text/markdown; charset=utf-8'
+    '''
+    _name = iri_minus_namespace(iri, IANA_MEDIATYPE)
+    _typename, _, _parameters = _name.partition('#')
+    return (
+        f'{_typename}; {_parameters}'
+        if _parameters
+        else _typename
+    )
+
+
 # map a short string to a longer iri (or IriNamespace)
 ShorthandPrefixMap = dict[str, Union[str, IriNamespace]]
 RDF_PRIMITIVE_SHORTHAND: ShorthandPrefixMap = {
@@ -664,6 +727,8 @@ RDF_PRIMITIVE_SHORTHAND: ShorthandPrefixMap = {
     'rdf': RDF,
     'rdfs': RDFS,
     'xsd': XSD,
+    'lang': IANA_LANGUAGE,
+    'mediatype': IANA_MEDIATYPE,
 }
 
 
