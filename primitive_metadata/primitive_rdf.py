@@ -268,20 +268,28 @@ class Literal(NamedTuple):
     @property
     def language_tag(self) -> Optional[str]:
         try:
-            return next(
-                iri_minus_namespace(_iri, namespace=IANA_LANGUAGE)
-                for _iri in self.datatype_iris
-                if _iri in IANA_LANGUAGE
-            )
+            return next(self.iter_language_tags())
         except StopIteration:
             return None
 
+    def iter_language_tags(self) -> Iterable[str]:
+        yield from (
+            iri_minus_namespace(_iri, namespace=IANA_LANGUAGE)
+            for _iri in self.datatype_iris
+            if _iri in IANA_LANGUAGE
+        )
+
     def single_datatype(self) -> str:
-        if self.language_tag is not None:
+        if any(self.iter_language_tags()):
             return RDF.langString
-        if not self.datatype_iris:
-            return RDF.string
-        return choose_one_iri(self.datatype_iris)
+        if self.datatype_iris:
+            return choose_one_iri(self.datatype_iris)
+        return RDF.string
+
+    def as_literal_iri(self):
+        '''encode text as a self-addressed iri with scheme "literal"
+        '''
+        return LITERAL[self.unicode_value]  # TODO: datatype_iris
 
 
 def literal(
@@ -374,6 +382,13 @@ def literal(
     return Literal(
         unicode_value=_str_value,
         datatype_iris=frozenset(_iter_datatype_iris()),
+    )
+
+
+def literal_json(jsonable_obj, *, dumps=None):
+    return literal(
+        json.dumps(jsonable_obj, **(dumps or {})),
+        datatype_iris={RDF.JSON},
     )
 
 
@@ -559,7 +574,7 @@ class IriNamespace:
                 f'name "{name}" not in namespace "{self.__iri}"'
                 f' (allowed names: {self.__nameset})'
             )
-        return ''.join((self.__iri, name))  # TODO: urlencode name
+        return ''.join((self.__iri, name))
 
     def __getitem__(self, names) -> str:
         '''IriNamespace.__getitem__: build iri with `SQUARE['bracket']` syntax
@@ -640,6 +655,10 @@ def iri_minus_namespace(
 
 
 ###
+# static iri namespaces
+
+LITERAL = IriNamespace('literal:')  # a joke that might be serious
+
 # some standard namespaces used herein
 RDF = IriNamespace('http://www.w3.org/1999/02/22-rdf-syntax-ns#')
 RDFS = IriNamespace('http://www.w3.org/2000/01/rdf-schema#')
