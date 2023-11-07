@@ -262,11 +262,11 @@ class Literal(NamedTuple):
     #                                links that help read the value str
     # (if you wish to constrain to IETF language tags
     # in https://www.rfc-editor.org/rfc/bcp/bcp47.txt
-    # use the helper `literal(.., language_tag='..')`
+    # use the helper `literal(.., language='..')`
     # or an iri within the `IANA_LANGUAGE` namespace)
 
     @property
-    def language_tag(self) -> Optional[str]:
+    def language(self) -> Optional[str]:
         try:
             return next(self.iter_language_tags())
         except StopIteration:
@@ -295,7 +295,7 @@ class Literal(NamedTuple):
 def literal(
     primitive_value: Union[str, int, float, datetime.date, None], *,
     datatype_iris: Union[str, Iterable[str]] = (),
-    language_tag=None,  # adds an IANA_LANGUAGE iri to datatype_iris
+    language=None,  # adds an IANA_LANGUAGE iri to datatype_iris
     mediatype=None,  # adds a IANA_MEDIATYPE iri to datatype_iris
 ) -> Union[Literal, None]:
     '''convenience wrapper for Literal
@@ -312,14 +312,14 @@ def literal(
     >>> literal('hello', mediatype='text/plain;charset=utf-8')
     Literal(unicode_value='hello',
         datatype_iris=frozenset({'https://www.iana.org/assignments/media-types/text/plain#charset=utf-8'}))
-    >>> literal('hello', language_tag='es').datatype_iris == {
+    >>> literal('hello', language='es').datatype_iris == {
     ...     RDF.langString,
     ...     IANA_LANGUAGE['es'],
     ... }
     True
     >>> literal(
     ...    '¿porque no los dos?',
-    ...    language_tag='es',
+    ...    language='es',
     ...    mediatype='text/plain;charset=utf-8',
     ... ).datatype_iris == {
     ...     RDF.langString,
@@ -331,7 +331,7 @@ def literal(
     returns None for empty values:
     >>> literal(None)
     >>> literal('')
-    >>> literal('', language_tag='foo')
+    >>> literal('', language='foo')
     '''
     if primitive_value is None:
         return None
@@ -339,7 +339,7 @@ def literal(
     _implied_datatype = None
     if isinstance(primitive_value, str):
         _str_value = primitive_value
-        if language_tag:
+        if language:
             _implied_datatype = RDF.langString
         elif not datatype_iris and not mediatype:
             _implied_datatype = RDF.string
@@ -357,7 +357,7 @@ def literal(
         _implied_datatype = XSD.date
     else:
         raise ValueError(f'expected RdfObject, got {primitive_value}')
-    if not _str_value:
+    if not _str_value:  # TODO: should empty literals?
         return None
 
     def _iter_one_or_many(items) -> Iterable:
@@ -372,8 +372,11 @@ def literal(
 
     def _iter_datatype_iris() -> Iterable[str]:
         yield from _iter_one_or_many(datatype_iris)
-        for _tag in _iter_one_or_many(language_tag):
-            yield IANA_LANGUAGE[_tag]
+        for _language in _iter_one_or_many(language):
+            if ':' in _language:  # assume full IRI
+                yield _language
+            else:  # assume language tag
+                yield IANA_LANGUAGE[_language]
         for _mediatype in _iter_one_or_many(mediatype):
             yield iri_from_mediatype(_mediatype)
         if _implied_datatype is not None:
@@ -385,9 +388,9 @@ def literal(
     )
 
 
-def literal_json(jsonable_obj, *, dumps=None):
+def literal_json(jsonable_obj):
     return literal(
-        json.dumps(jsonable_obj, **(dumps or {})),
+        json.dumps(jsonable_obj, sort_keys=True),
         datatype_iris={RDF.JSON},
     )
 
@@ -674,8 +677,8 @@ XSD = IriNamespace('http://www.w3.org/2001/XMLSchema#')
 IANA_LANGUAGE = IriNamespace(
     'https://www.iana.org/assignments/language-subtag-registry#',
     namestory=lambda: (
-        literal('language', language_tag='en'),
-        literal('language tag', language_tag='en'),
+        literal('language', language='en'),
+        literal('language tag', language='en'),
         literal((
             'a "language tag" (as used by RDF and defined by IETF'
             ' in BCP 47 (https://www.ietf.org/rfc/bcp/bcp47.txt))'
@@ -685,7 +688,7 @@ IANA_LANGUAGE = IriNamespace(
             ' (with appended "#") is used as an IRI namespace for'
             ' language tags (even tho the tag may contain several'
             ' registered subtags) -- this is probably okay to do.'
-        ), language_tag='en'),
+        ), language='en'),
     ),
 )
 
@@ -693,10 +696,10 @@ IANA_LANGUAGE = IriNamespace(
 IANA_MEDIATYPE = IriNamespace(
     'https://www.iana.org/assignments/media-types/',
     namestory=lambda: (
-        literal('mediatype', language_tag='en'),
+        literal('mediatype', language='en'),
         literal(
             'an IRI namespace for media-types (without parameters)',
-            language_tag='en',
+            language='en',
         ),
         literal((
             'if a literal conforms to a media type (aka "MIME type"'
@@ -705,7 +708,7 @@ IANA_MEDIATYPE = IriNamespace(
             ' for media types that do not require parameters to use'
             ' utf-8 (since rdf literals in lexical form are utf-8).'
             ' for example, IANA_MEDIATYPE["text/turtle"]'
-        ), language_tag='en'),
+        ), language='en'),
     ),
 )
 
@@ -1187,7 +1190,7 @@ def rdfobject_from_nocontext_jsonld(jsonld_obj: dict):
             return _value
         _language_tag = jsonld_obj.get('@language')
         if _language_tag:
-            return literal(_value, language_tag=_language_tag)
+            return literal(_value, language=_language_tag)
         _type_iri = jsonld_obj.get('@type')
         if _type_iri == XSD.date:
             return datetime.date.fromisoformat(_value)  # python 3.7+
@@ -1365,7 +1368,7 @@ class JsonldSerializer:
         if '@value' in jsonld_obj:
             _literal_kwargs = {}
             if '@language' in jsonld_obj:
-                _literal_kwargs['language_tag'] = jsonld_obj['@language']
+                _literal_kwargs['language'] = jsonld_obj['@language']
             if '@type' in jsonld_obj:
                 _literal_kwargs['datatype_iris'] = jsonld_obj['@type']
             return literal(jsonld_obj['@value'], **_literal_kwargs)
@@ -1614,8 +1617,8 @@ else:
         ...         BLARG.ba: {
         ...             literal('ha pa la xa', datatype_iris=BLARG.Dunno),
         ...             literal('naja yaba', datatype_iris=BLARG.Mystery),
-        ...             literal('basic', language_tag='en'),
-        ...             literal('মৌলিক', language_tag='bn'),
+        ...             literal('basic', language='en'),
+        ...             literal('মৌলিক', language='bn'),
         ...         },
         ...     }
         ... }
@@ -1756,7 +1759,7 @@ else:
                 if rdflib_obj.language:
                     return literal(
                         str(rdflib_obj),
-                        language_tag=rdflib_obj.language,
+                        language=rdflib_obj.language,
                     )
                 _as_python = rdflib_obj.toPython()
                 if isinstance(_as_python, (int, float, datetime.date)):

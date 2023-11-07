@@ -38,7 +38,7 @@ from gather.primitive_rdf import (
     ensure_frozenset,
     is_container,
     container_objects,
-    text,
+    literal,
     tidy_pathset,
 )
 
@@ -462,11 +462,11 @@ if __debug__:
     )
     BlargAtheringNorms = GatheringNorms(
         namestory=(
-            text('blarg', language_iri=BLARG.myLanguage),
-            text('blargl blarg', language_iri=BLARG.myLanguage),
-            text(
+            literal('blarg', language=BLARG.myLanguage),
+            literal('blargl blarg', language=BLARG.myLanguage),
+            literal(
                 'a gathering called "blarg"',
-                language_tag='en-US',
+                language='en-US',
             ),
         ),
         vocabulary={
@@ -484,7 +484,7 @@ if __debug__:
 
     BlorgArganizer = GatheringOrganizer(
         namestory=(
-            text('blarg this way', language_iri=BLARG.myLanguage),
+            literal('blarg this way', language=BLARG.myLanguage),
         ),
         norms=BlargAtheringNorms,
         gatherer_kwargnames={'hello'},
@@ -492,21 +492,21 @@ if __debug__:
 
     @BlorgArganizer.gatherer(BLARG.greeting)
     def blargather_greeting(focus: Focus, *, hello):
-        yield (BLARG.greeting, text(
+        yield (BLARG.greeting, literal(
             'kia ora',
-            language_tag='mi',
+            language='mi',
         ))
-        yield (BLARG.greeting, text(
+        yield (BLARG.greeting, literal(
             'hola',
-            language_tag='es',
+            language='es',
         ))
-        yield (BLARG.greeting, text(
+        yield (BLARG.greeting, literal(
             'hello',
-            language_tag='en',
+            language='en',
         ))
-        yield (BLARG.greeting, text(
+        yield (BLARG.greeting, literal(
             hello,
-            language_iri=BLARG.Dunno,
+            language=BLARG.Dunno,
         ))
 
     @BlorgArganizer.gatherer(focustype_iris={BLARG.SomeType})
@@ -565,10 +565,10 @@ if __debug__:
             self.assertEqual(
                 set(blargAthering.ask(BLARG.greeting, focus=_a_blargfocus)),
                 {
-                    text('kia ora', language_tag='mi'),
-                    text('hola', language_tag='es'),
-                    text('hello', language_tag='en'),
-                    text('haha', language_iri=BLARG.Dunno),
+                    literal('kia ora', language='mi'),
+                    literal('hola', language='es'),
+                    literal('hello', language='en'),
+                    literal('haha', language=BLARG.Dunno),
                 },
             )
             self.assertEqual(
@@ -597,10 +597,10 @@ if __debug__:
                 _a_blargfocus.single_iri(): {
                     RDF.type: {BLARG.SomeType},
                     BLARG.greeting: {
-                        text('kia ora', language_tag='mi'),
-                        text('hola', language_tag='es'),
-                        text('hello', language_tag='en'),
-                        text('hoohoo', language_iri=BLARG.Dunno),
+                        literal('kia ora', language='mi'),
+                        literal('hola', language='es'),
+                        literal('hello', language='en'),
+                        literal('hoohoo', language=BLARG.Dunno),
                     },
                     BLARG.yoo: {_nother_blargfocus.single_iri()},
                     BLARG.number: {1},
@@ -608,10 +608,10 @@ if __debug__:
                 _nother_blargfocus.single_iri(): {
                     RDF.type: {BLARG.AnotherType},
                     BLARG.greeting: {
-                        text('kia ora', language_tag='mi'),
-                        text('hola', language_tag='es'),
-                        text('hello', language_tag='en'),
-                        text('hoohoo', language_iri=BLARG.Dunno),
+                        literal('kia ora', language='mi'),
+                        literal('hola', language='es'),
+                        literal('hello', language='en'),
+                        literal('hoohoo', language=BLARG.Dunno),
                     },
                     BLARG.yoo: {_a_blargfocus.single_iri()},
                 },

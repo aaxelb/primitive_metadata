@@ -1,5 +1,5 @@
 [project]
 name = "primitive_metadata"
 readme = "README.md"
-version = "0.2023.55"
+version = "0.2023.56"
 requires-python = ">=3.7"
