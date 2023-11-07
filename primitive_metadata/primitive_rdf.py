@@ -921,8 +921,8 @@ class RdfGraph:
     >>> set(_mygraph.q(BLARG.foo, BLARG.bar)) == {BLARG.baz, BLARG.zab}
     True
     '''
-    def __init__(self, tripledict, shorthand=None):
-        self.tripledict = tripledict
+    def __init__(self, tripledict=None, shorthand=None):
+        self.tripledict = {} if (tripledict is None) else tripledict
 
     def add(self, triple: RdfTriple):
         (_subj, _pred, _obj) = triple

@@ -22,7 +22,7 @@ import itertools
 import types
 from typing import Union, NamedTuple, Iterable, Any, Callable, Optional
 
-from gather.primitive_rdf import (
+from primitive_metadata.primitive_rdf import (
     IriNamespace,
     MessyPathset,
     Namestory,
@@ -34,7 +34,7 @@ from gather.primitive_rdf import (
     RdfTripleDictionary,
     RdfTwople,
     TidyPathset,
-    TripledictWrapper,
+    RdfGraph,
     ensure_frozenset,
     is_container,
     container_objects,
@@ -253,9 +253,9 @@ class Gathering:
 
     def leaf_a_record(self, *, pls_copy=False) -> RdfTripleDictionary:
         return (
-            copy.deepcopy(self.cache.tripledict)
+            copy.deepcopy(self.cache.gathered.tripledict)
             if pls_copy
-            else types.MappingProxyType(self.cache.tripledict)
+            else types.MappingProxyType(self.cache.gathered.tripledict)
         )
 
     def __gather_by_pathset(self, pathset: TidyPathset, *, focus: Focus):
@@ -311,29 +311,30 @@ class Gathering:
                 self.cache.add_triple(triple)
 
 
-class _GatherCache(TripledictWrapper):
+class _GatherCache:
     gathers_done: set[tuple[Gatherer, Focus]]
     focus_set: set[Focus]
+    gathered: RdfGraph
 
     def __init__(self):
         self.gathers_done = set()
         self.focus_set = set()
-        super().__init__({})
+        self.gathered = RdfGraph()
 
     def add_focus(self, focus: Focus):
         if focus not in self.focus_set:
             self.focus_set.add(focus)
             for triple in focus.as_rdf_tripleset():
-                self.add_triple(triple)
+                self.gathered.add(triple)
 
     def get_focus_by_iri(self, iri: str):
-        _type_iris = frozenset(self.q(iri, RDF.type))
+        _type_iris = frozenset(self.gathered.q(iri, RDF.type))
         if not _type_iris:
             raise GatherException(
                 label='cannot-get-focus',
                 comment=f'found no type for "{iri}"',
             )
-        _same_iris = self.q(iri, OWL.sameAs)
+        _same_iris = self.gathered.q(iri, OWL.sameAs)
         _iris = {iri, *_same_iris}
         _focus = focus(iris=_iris, type_iris=_type_iris)
         self.add_focus(_focus)
@@ -343,7 +344,7 @@ class _GatherCache(TripledictWrapper):
         (_subj, _pred, _obj) = triple
         _subj = self.__maybe_unwrap_focus(_subj)
         _obj = self.__maybe_unwrap_focus(_obj)
-        super().add_triple((_subj, _pred, _obj))
+        self.gathered.add((_subj, _pred, _obj))
 
     def peek(
         self, pathset: MessyPathset, *,
@@ -359,7 +360,7 @@ class _GatherCache(TripledictWrapper):
             raise ValueError(
                 f'expected focus to be str or Focus or None (got {focus})'
             )
-        return self.q(_focus_iri, pathset)
+        return self.gathered.q(_focus_iri, pathset)
 
     def already_gathered(
         self, gatherer: Gatherer, focus: Focus, *,
@@ -372,8 +373,8 @@ class _GatherCache(TripledictWrapper):
         return is_done
 
     def __maybe_unwrap_focus(
-            self,
-            maybefocus: Union[Focus, RdfObject],
+        self,
+        maybefocus: Union[Focus, RdfObject],
     ):
         if isinstance(maybefocus, Focus):
             self.add_focus(maybefocus)
