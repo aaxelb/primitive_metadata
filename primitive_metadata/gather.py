@@ -40,6 +40,7 @@ from primitive_metadata.primitive_rdf import (
     container_objects,
     literal,
     tidy_pathset,
+    choose_one_iri,
 )
 
 __all__ = (
@@ -59,7 +60,7 @@ class Focus(NamedTuple):
     gatherer_kwargset: frozenset[tuple[str, Any]]
 
     def single_iri(self) -> str:
-        return min(self.iris, key=len)  # choose the shortest iri
+        return choose_one_iri(self.iris)
 
     def as_rdf_tripleset(self) -> Iterable[RdfTriple]:
         _iri = self.single_iri()

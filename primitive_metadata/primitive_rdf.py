@@ -51,6 +51,23 @@ MessyPathset = Union[
 ###
 # utility/helper functions for working with the "Rdf..." types above
 
+def add_triple(tripledict: RdfTripleDictionary, triple: RdfTriple):
+    (_subj, _pred, _obj) = triple
+    (
+        tripledict
+        .setdefault(_subj, dict())
+        .setdefault(_pred, set())
+        .add(_obj)
+    )
+
+
+def tripledict_from_tripleset(tripleset: Iterable[RdfTriple]):
+    _tripledict = {}
+    for _triple in tripleset:
+        add_triple(_tripledict, _triple)
+    return _tripledict
+
+
 def ensure_frozenset(something) -> frozenset:
     '''convenience for building frozensets
 
@@ -668,7 +685,8 @@ RDFS = IriNamespace('http://www.w3.org/2000/01/rdf-schema#')
 OWL = IriNamespace('http://www.w3.org/2002/07/owl#')
 XSD = IriNamespace('http://www.w3.org/2001/XMLSchema#')
 
-# `Literal` can have many iris for language/type;
+# in this implementation, `Literal` can have many
+# datatype iris, which includes languages by iri:
 # here is a probably-reliable way to express IETF
 # language tags in iri form (TODO: consider using
 # id.loc.gov instead? is authority for ISO 639-1,
@@ -763,7 +781,7 @@ RDF_PRIMITIVE_SHORTHAND: ShorthandPrefixMap = {
     'rdf': RDF,
     'rdfs': RDFS,
     'xsd': XSD,
-    'lang': IANA_LANGUAGE,
+    'language': IANA_LANGUAGE,
     'mediatype': IANA_MEDIATYPE,
 }
 
@@ -921,17 +939,20 @@ class RdfGraph:
     >>> set(_mygraph.q(BLARG.foo, BLARG.bar)) == {BLARG.baz, BLARG.zab}
     True
     '''
-    def __init__(self, tripledict=None, shorthand=None):
-        self.tripledict = {} if (tripledict is None) else tripledict
+    def __init__(
+        self, triples: Union[RdfTripleDictionary, Iterable[RdfTriple]] = None,
+        *,  # keyword-only params:
+        shorthand: IriShorthand = None,
+    ):
+        if triples is None:
+            self.tripledict = {}
+        elif isinstance(triples, dict):
+            self.tripledict = triples
+        else:  # assume Iterable[RdfTriple]
+            self.tripledict = tripledict_from_tripleset(triples)
 
     def add(self, triple: RdfTriple):
-        (_subj, _pred, _obj) = triple
-        (
-            self.tripledict
-            .setdefault(_subj, dict())
-            .setdefault(_pred, set())
-            .add(_obj)
-        )
+        add_triple(self.tripledict, triple)
 
     def remove(self, triple: RdfTriple):
         '''remove a triple from the graph
@@ -1238,7 +1259,10 @@ class JsonldSerializer:
     # constant TRIPLEDICT_JSONLD_CONTEXT assumed part of the jsonld @context
     # make sure full iris can be reconstructed without any network requests
     TRIPLEDICT_JSONLD_CONTEXT = {
-        '@container': '@id',  # top-level keys are ids
+        'data': '@nest',  # top-level 'data' object has focus_iri as '@id'
+        'included': {
+            '@container': '@id',  # top-level 'included' object has iri keys
+        },
     }
 
     def __init__(self, iri_shorthand: Optional[IriShorthand] = None):
@@ -1260,7 +1284,10 @@ class JsonldSerializer:
     ###
     # jsonld serialization (following the structure of RdfTripleDictionary)
 
-    def serialize_tripledict(self, tripledict: RdfTripleDictionary) -> str:
+    def serialize_tripledict(
+        self, tripledict: RdfTripleDictionary, *,
+        focus_iri=None,
+    ) -> str:
         return json.dumps(
             self.tripledict_as_jsonld(tripledict, with_context=True),
             sort_keys=True,  # stable serialization
@@ -1270,7 +1297,7 @@ class JsonldSerializer:
         self, tripledict: RdfTripleDictionary, *,
         with_context=True,
     ) -> dict:
-        '''build a json-serializable copy of this serializer's tripledict
+        '''build a json-serializable copy of the given tripledict
         '''
         with self.shorthand.track_used_shorts() as _used_shorts:
             _jsonld = {
@@ -1292,13 +1319,22 @@ class JsonldSerializer:
         }
 
     def objectset_as_jsonld(self, object_set: Iterable[RdfObject]):
-        _object_list = [
-            self.rdfobject_as_jsonld(_obj)
-            for _obj in object_set
-        ]
-        return _json_sort(_object_list)
+        _obj_list = []
+        _quoted = set()
+        for _obj in object_set:
+            if isinstance(_obj, QuotedTriple):
+                _quoted.add(_obj)
+            else:
+                _obj_list.append(self.rdfobject_as_jsonld(_obj))
+        _obj_list.append(self.triples_as_jsonld(_quoted))
+        return _json_sort(_obj_list)
 
-    def rdfobject_as_jsonld(self, rdfobj: RdfObject):
+    def triples_as_jsonld(self, triples: Iterable[RdfTriple]):
+        return self.tripledict_as_jsonld(tripledict_from_tripleset(triples))
+
+    def rdfobject_as_jsonld(self, rdfobj: RdfObject) -> dict:
+        if isinstance(rdfobj, QuotedTriple):
+            return self.triples_as_jsonld([rdfobj])
         if isinstance(rdfobj, str):  # iri
             return {'@id': self.shorthand.compact_iri(rdfobj)}
         if isinstance(rdfobj, frozenset):  # blank (no iri)
@@ -1320,7 +1356,6 @@ class JsonldSerializer:
             if _datatypes:
                 _jsonld_obj['@type'] = _json_item_or_list(_datatypes)
             return _jsonld_obj
-        # TODO: QuotedTriple
         raise ValueError(f'expected RdfObject, got {rdfobj}')
 
     ###
@@ -1585,7 +1620,8 @@ else:
 
     def turtle_from_tripledict(
         tripledict: RdfTripleDictionary, *,
-        focus=None,
+        focus: Optional[str] = None,
+        shorthand: Optional[IriShorthand] = None,  # TODO: add to turtle prefix
     ) -> str:
         _rdflib_graph = rdflib_graph_from_tripledict(tripledict)
         # TODO: sort blocks, focus first
