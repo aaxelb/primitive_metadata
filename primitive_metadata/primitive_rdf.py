@@ -1303,6 +1303,8 @@ class JsonldSerializer:
             return {'@id': self.shorthand.compact_iri(rdfobj)}
         if isinstance(rdfobj, frozenset):  # blank (no iri)
             return self.twopledict_as_jsonld(twopledict_from_twopleset(rdfobj))
+        if isinstance(rdfobj, (int, float, datetime.datetime)):
+            return rdfobject_as_jsonld(literal(rdfobj))
         if isinstance(rdfobj, Literal):
             _jsonld_obj = {'@value': rdfobj.unicode_value}
             _lang_tags = set()
