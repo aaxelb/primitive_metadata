@@ -786,8 +786,10 @@ class IriShorthand:
     def track_used_shorts(self):
         assert self.__used_shorts is None
         _used_shorts = self.__used_shorts = set()
-        yield _used_shorts
-        self.__used_shorts = None
+        try:
+            yield _used_shorts
+        finally:
+            self.__used_shorts = None
 
     def compact_iri(self, iri: str) -> str:
         '''return a compacted form of the given iri (or the iri unchanged)
