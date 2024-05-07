@@ -131,16 +131,27 @@ TripleGatherer = Callable[
 # - declare a `GatheringOrganizer` for each implementation of given norms
 # - write `Gatherer` functions that yield triples or twoples, given Focus
 
-class GatheringNorms:
-    def __init__(
-        self, *,
-        namestory: Namestory,
-        vocabulary: RdfTripleDictionary,
-        focustype_iris: frozenset[str],
-    ):
-        self.namestory = namestory
-        self.vocabulary = vocabulary
-        self.focustype_iris = ensure_frozenset(focustype_iris)
+def GatheringNorms(
+    namestory: Namestory,
+    focustype_iris: Iterable[str],
+    arg_iris: Iterable[str] = (),
+    thesaurus: Optional[RdfTripleDictionary] = None,
+):
+    '''constructor for the _GatheringNorms namedtuple
+    '''
+    return _GatheringNorms(
+        namestory,
+        focustype_iris=ensure_frozenset(focustype_iris),
+        arg_iris=ensure_frozenset(arg_iris),
+        thesaurus=(thesaurus or {}),
+    )
+
+
+class _GatheringNorms(NamedTuple):
+    namestory: Namestory
+    thesaurus: RdfTripleDictionary
+    focustype_iris: frozenset[str]
+    arg_iris: frozenset[str]
 
 
 class GatheringOrganizer:
@@ -148,7 +159,6 @@ class GatheringOrganizer:
         self,
         namestory: Namestory,
         norms: GatheringNorms,
-        gatherer_kwargnames: Optional[Iterable[str]] = None,
         # TODO: gatherer_kwarg_iris, let each gatherer declare its accepted
         # kwargs with a dictionary {kwarg_name: kwarg_iri} -- decouple outward
         # "organizer" interface from organizer-gatherer interface, allow
