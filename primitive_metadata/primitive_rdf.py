@@ -4,11 +4,15 @@ uses rdf concepts: https://www.w3.org/TR/rdf11-concepts/
 '''
 # only standard imports (python 3.? (TODO: specificity informed by testing))
 import contextlib
+import dataclasses  # python3.7+
 import datetime
+import functools  # using functools.cache: python3.9+
 import json
 import logging
 import operator
-from typing import Iterable, Union, Optional, NamedTuple
+import types
+from typing import Iterable, Union, Optional, NamedTuple, Callable
+import weakref
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +54,23 @@ MessyPathset = Union[
 
 ###
 # utility/helper functions for working with the "Rdf..." types above
+
+def add_triple(tripledict: RdfTripleDictionary, triple: RdfTriple):
+    (_subj, _pred, _obj) = triple
+    (
+        tripledict
+        .setdefault(_subj, dict())
+        .setdefault(_pred, set())
+        .add(_obj)
+    )
+
+
+def tripledict_from_tripleset(tripleset: Iterable[RdfTriple]):
+    _tripledict = {}
+    for _triple in tripleset:
+        add_triple(_tripledict, _triple)
+    return _tripledict
+
 
 def ensure_frozenset(something) -> frozenset:
     '''convenience for building frozensets
@@ -293,11 +314,11 @@ class Literal(NamedTuple):
 
 
 def literal(
-    primitive_value: Union[str, int, float, datetime.date, None], *,
+    primitive_value: Union[str, int, float, datetime.date], *,
     datatype_iris: Union[str, Iterable[str]] = (),
     language=None,  # adds an IANA_LANGUAGE iri to datatype_iris
     mediatype=None,  # adds a IANA_MEDIATYPE iri to datatype_iris
-) -> Union[Literal, None]:
+) -> Literal:
     '''convenience wrapper for Literal
 
     >>> literal('blurbl di blarbl da', datatype_iris={BLARG.my_language})
@@ -327,14 +348,14 @@ def literal(
     ...     IANA_MEDIATYPE['text/plain#charset=utf-8'],
     ... }
     True
-
-    returns None for empty values:
-    >>> literal(None)
     >>> literal('')
-    >>> literal('', language='foo')
+    Literal(unicode_value='',
+            datatype_iris=frozenset({'http://www.w3.org/1999/02/22-rdf-syntax-ns#string'}))
+    >>> literal(None)
+    Traceback (most recent call last):
+      ...
+    ValueError: expected RdfObject, got None
     '''
-    if primitive_value is None:
-        return None
     _str_value = None
     _implied_datatype = None
     if isinstance(primitive_value, str):
@@ -355,10 +376,9 @@ def literal(
     elif isinstance(primitive_value, datetime.date):
         _str_value = primitive_value.isoformat()
         _implied_datatype = XSD.date
-    else:
+
+    if _str_value is None:
         raise ValueError(f'expected RdfObject, got {primitive_value}')
-    if not _str_value:  # TODO: should empty literals?
-        return None
 
     def _iter_one_or_many(items) -> Iterable:
         if isinstance(items, str):
@@ -386,6 +406,19 @@ def literal(
         unicode_value=_str_value,
         datatype_iris=frozenset(_iter_datatype_iris()),
     )
+
+
+def literal_or_none(
+    primitive_value: Union[str, int, float, datetime.date, None], **kwargs
+) -> Union[Literal, None]:
+    '''
+    same as `literal`, but gives None for empty values instead ValueError
+
+    >>> literal_or_none(None)
+    '''
+    if primitive_value is None:
+        return None
+    return literal(primitive_value, **kwargs)
 
 
 def literal_json(jsonable_obj):
@@ -557,7 +590,7 @@ class IriNamespace:
     def __init__(
         self, iri: str, *,
         nameset: Optional[set[str]] = None,
-        namestory: Optional[Namestory] = None,
+        namestory: Optional[Namestory | Callable[[], Namestory]] = None,
     ):
         # TODO: namespace metadata/definition
         if ':' not in iri:
@@ -570,6 +603,14 @@ class IriNamespace:
             else None
         )
         self.__namestory = namestory
+
+    @functools.cached_property
+    def namestory(self):
+        return (
+            self.__namestory()
+            if callable(self.__namestory)
+            else self.__namestory
+        )
 
     def __join_name(self, name: str) -> str:
         if (self.__nameset is not None) and (name not in self.__nameset):
@@ -668,7 +709,8 @@ RDFS = IriNamespace('http://www.w3.org/2000/01/rdf-schema#')
 OWL = IriNamespace('http://www.w3.org/2002/07/owl#')
 XSD = IriNamespace('http://www.w3.org/2001/XMLSchema#')
 
-# `Literal` can have many iris for language/type;
+# in this implementation, `Literal` can have many
+# datatype iris, which includes languages by iri:
 # here is a probably-reliable way to express IETF
 # language tags in iri form (TODO: consider using
 # id.loc.gov instead? is authority for ISO 639-1,
@@ -758,14 +800,6 @@ def mediatype_from_iri(iri: str) -> str:
 
 # map a short string to a longer iri (or IriNamespace)
 ShorthandPrefixMap = dict[str, Union[str, IriNamespace]]
-RDF_PRIMITIVE_SHORTHAND: ShorthandPrefixMap = {
-    'owl': OWL,
-    'rdf': RDF,
-    'rdfs': RDFS,
-    'xsd': XSD,
-    'lang': IANA_LANGUAGE,
-    'mediatype': IANA_MEDIATYPE,
-}
 
 
 class IriShorthand:
@@ -775,11 +809,8 @@ class IriShorthand:
         self,
         prefix_map: Optional[ShorthandPrefixMap] = None,
         delimiter=':',
-        with_rdf_primitive=True,
     ):
         self.prefix_map = {**(prefix_map or {})}  # make a copy; handle None
-        if with_rdf_primitive:
-            self.prefix_map.update(RDF_PRIMITIVE_SHORTHAND)
         self.delimiter = delimiter
 
     @contextlib.contextmanager
@@ -923,17 +954,23 @@ class RdfGraph:
     >>> set(_mygraph.q(BLARG.foo, BLARG.bar)) == {BLARG.baz, BLARG.zab}
     True
     '''
-    def __init__(self, tripledict=None, shorthand=None):
-        self.tripledict = {} if (tripledict is None) else tripledict
+    tripledict: RdfTripleDictionary
+
+    def __init__(
+        self,
+        triples: Union[RdfTripleDictionary, Iterable[RdfTriple], None] = None,
+        *,  # keyword-only params:
+        shorthand: IriShorthand | None = None,
+    ):
+        if triples is None:
+            self.tripledict = {}
+        elif isinstance(triples, dict):
+            self.tripledict = triples
+        else:  # assume Iterable[RdfTriple]
+            self.tripledict = tripledict_from_tripleset(triples)
 
     def add(self, triple: RdfTriple):
-        (_subj, _pred, _obj) = triple
-        (
-            self.tripledict
-            .setdefault(_subj, dict())
-            .setdefault(_pred, set())
-            .add(_obj)
-        )
+        add_triple(self.tripledict, triple)
 
     def remove(self, triple: RdfTriple):
         '''remove a triple from the graph
@@ -1205,375 +1242,207 @@ def rdfobject_from_nocontext_jsonld(jsonld_obj: dict):
 
 
 ###
-# primitive-context json-ld serialization
-
-class JsonldSerializer:
-    '''
-
-    lil tripledict for doctests:
-    >>> _td = {
-    ...     RDF.value: {
-    ...         RDF.type: {RDF.Property},
-    ...         RDF.value: {RDF.value, RDF.nil},
-    ...     }
-    ... }
-
-    # serialize to a string
-    >>> _json_str = JsonldSerializer().serialize_tripledict(_td)
-    >>> _json_str == json.dumps({
-    ...     "@context": {
-    ...         "@container": "@id",
-    ...         "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-    ...     },
-    ...     "rdf:value": {
-    ...         "rdf:type": [{"@id": "rdf:Property"}],
-    ...         "rdf:value": [{"@id": "rdf:nil"}, {"@id": "rdf:value"}],
-    ...     },
-    ... }, sort_keys=True)
-    True
-
-    # deserialize back to a dict
-    >>> _td_copy = JsonldSerializer.deserialize_tripledict(_json_str)
-    >>> _td_copy == _td
-    True
-    '''
-    # constant TRIPLEDICT_JSONLD_CONTEXT assumed part of the jsonld @context
-    # make sure full iris can be reconstructed without any network requests
-    TRIPLEDICT_JSONLD_CONTEXT = {
-        '@container': '@id',  # top-level keys are ids
-    }
-
-    def __init__(self, iri_shorthand: Optional[IriShorthand] = None):
-        self.shorthand = iri_shorthand or IriShorthand()
-
-    def shorthand_jsonld_context(self, used_shorts=None):
-        return {
-            _short: str(_long)
-            for _short, _long in self.shorthand.prefix_map.items()
-            if (used_shorts is None or _short in used_shorts)
-        }
-
-    def tripledict_jsonld_context(self, used_shorts=None):
-        return {
-            **self.TRIPLEDICT_JSONLD_CONTEXT,
-            **self.shorthand_jsonld_context(used_shorts),
-        }
-
-    ###
-    # jsonld serialization (following the structure of RdfTripleDictionary)
-
-    def serialize_tripledict(self, tripledict: RdfTripleDictionary) -> str:
-        return json.dumps(
-            self.tripledict_as_jsonld(tripledict, with_context=True),
-            sort_keys=True,  # stable serialization
-        )
-
-    def tripledict_as_jsonld(
-        self, tripledict: RdfTripleDictionary, *,
-        with_context=True,
-    ) -> dict:
-        '''build a json-serializable copy of this serializer's tripledict
-        '''
-        with self.shorthand.track_used_shorts() as _used_shorts:
-            _jsonld = {
-                self.shorthand.compact_iri(_iri):
-                    self.twopledict_as_jsonld(_twopledict)
-                for _iri, _twopledict in tripledict.items()
-            }
-        if with_context:
-            _jsonld['@context'] = self.tripledict_jsonld_context(_used_shorts)
-        return _jsonld
-
-    def twopledict_as_jsonld(self, twopledict):
-        '''build a json-serializable copy of the given twopledict
-        '''
-        return {
-            self.shorthand.compact_iri(_pred):
-                self.objectset_as_jsonld(_object_set)
-            for _pred, _object_set in twopledict.items()
-        }
-
-    def objectset_as_jsonld(self, object_set: Iterable[RdfObject]):
-        _object_list = [
-            self.rdfobject_as_jsonld(_obj)
-            for _obj in object_set
-        ]
-        return _json_sort(_object_list)
-
-    def rdfobject_as_jsonld(self, rdfobj: RdfObject):
-        if isinstance(rdfobj, str):  # iri
-            return {'@id': self.shorthand.compact_iri(rdfobj)}
-        if isinstance(rdfobj, frozenset):  # blank (no iri)
-            return self.twopledict_as_jsonld(twopledict_from_twopleset(rdfobj))
-        if isinstance(rdfobj, (int, float, datetime.datetime)):
-            return self.rdfobject_as_jsonld(literal(rdfobj))
-        if isinstance(rdfobj, Literal):
-            _jsonld_obj = {'@value': rdfobj.unicode_value}
-            _lang_tags = set()
-            _datatypes = set()
-            for _language_iri in rdfobj.datatype_iris:
-                if _language_iri in IANA_LANGUAGE:
-                    _lang_tags.add(iri_minus_namespace(
-                        _language_iri,
-                        namespace=IANA_LANGUAGE,
-                    ))
-                else:
-                    _datatypes.add(self.shorthand.compact_iri(_language_iri))
-            if _lang_tags:
-                _jsonld_obj['@language'] = _json_item_or_list(_lang_tags)
-            if _datatypes:
-                _jsonld_obj['@type'] = _json_item_or_list(_datatypes)
-            return _jsonld_obj
-        # TODO: QuotedTriple
-        raise ValueError(f'expected RdfObject, got {rdfobj}')
-
-    ###
-    # jsonld deserialization
-    # (only for reversing JsonldSerializer, not arbitrary jsonld)
-
-    @classmethod
-    def from_context(cls, jsonld_context: dict) -> 'JsonldSerializer':
-        '''build a JsonldSerializer based on a jsonld "@context"
-        '''
-        _shorthand = IriShorthand({
-            _short: _long
-            for _short, _long in jsonld_context.items()
-            if isinstance(_long, str) and not _short.startswith('@')
-        })
-        return cls(_shorthand)
-
-    @classmethod
-    def deserialize_tripledict(cls, jsonld: Union[dict, str]) -> dict:
-        _jsonld_dict = (
-            jsonld
-            if isinstance(jsonld, dict)
-            else json.loads(jsonld)
-        )
-        _serializer = cls.from_context(_jsonld_dict.get('@context', {}))
-        return _serializer.tripledict_from_jsonld(_jsonld_dict)
-
-    def tripledict_from_jsonld(self, jsonld_dict: dict):
-        _tripledict = {}
-        for _key, _jsonld_object in jsonld_dict.items():
-            if _key.startswith('@'):
-                continue
-            _twopledict = {}
-            for _pred, _object_list in _jsonld_object.items():
-                _twopledict[self.shorthand.expand_iri(_pred)] = {
-                    self.rdfobject_from_jsonld(_obj)
-                    for _obj in _object_list
-                }
-            _tripledict[self.shorthand.expand_iri(_key)] = _twopledict
-        return _tripledict
-
-    def rdfobject_from_jsonld(self, jsonld_obj: dict):
-        if '@id' in jsonld_obj:
-            return self.shorthand.expand_iri(jsonld_obj['@id'])
-        if '@value' in jsonld_obj:
-            _literal_kwargs = {}
-            if '@language' in jsonld_obj:
-                _literal_kwargs['language'] = jsonld_obj['@language']
-            if '@type' in jsonld_obj:
-                _literal_kwargs['datatype_iris'] = jsonld_obj['@type']
-            return literal(jsonld_obj['@value'], **_literal_kwargs)
-        # TODO: support primitive json types?
-        raise ValueError(f'unrecognized rdf object: {jsonld_obj}')
-
-
-###
 # utilities for working with dataclasses
 #
 # use `dataclasses.Field.metadata` as RdfTwopleDictionary describing a property
 # (iri keys are safe enough against collision), with implicit `rdfs:label` from
 # `Field.name` (possible TODO: gather a `shacl:PropertyShape` for `Field.type`)
 #
+# similarly, imagine the `dataclasses.dataclass` decorator allowed a `metadata`
+# dictionary (defined same as `Field.metadata`) that we could treat as rdf data
+# describing an `rdfs:Class` corresponding to the dataclass itself (an instance
+# of the dataclass might have an implicit `rdf:type` in its rdf representation)
+# -- see `dataclass_metadata` and `get_dataclass_metadata`
+#
 # may treat a dataclass instance as blanknode, twople-dictionary, or twople-set
 # (TODO: maybe build a Focus based on fields mapped to owl:sameAs and rdf:type)
 
-try:
-    import dataclasses
-except ImportError:
-    logger.info(
-        'primitive_rdf.py: no dataclasses; omitting dataclass utilities',
+
+@functools.cache
+def _all_dataclass_metadata():
+    '''for storing dataclass metadata, keyed by the dataclass itself'''
+    return weakref.WeakKeyDictionary()
+
+
+def get_dataclass_metadata(datacls_or_instance) -> types.MappingProxyType:
+    _datacls = (
+        datacls_or_instance
+        if isinstance(datacls_or_instance, type)
+        else type(datacls_or_instance)
     )
-else:
-    import weakref
+    return types.MappingProxyType(_all_dataclass_metadata().get(_datacls, {}))
 
-    # imagine could pass `metadata={...}` to `dataclass()` same as `field()`
-    _DATACLASS_METADATA = weakref.WeakKeyDictionary()
 
-    def get_dataclass_metadata(datacls_or_instance) -> dict:
-        _datacls = (
-            datacls_or_instance
-            if isinstance(datacls_or_instance, type)
-            else type(datacls_or_instance)
-        )
-        return _DATACLASS_METADATA.get(_datacls, {})
+def dataclass_metadata(metadata: dict):
+    '''pretend `dataclasses.dataclass` had a `metadata` kwarg like `field`
 
-    def dataclass_metadata(metadata=None):
-        '''pretend `dataclasses.dataclass` had a `metadata` kwarg like `field`
+    decorate a dataclass with `dataclass_metadata` (put it before
+    `@dataclasses.dataclass` so it applies after) and pass twopledict to
+    `metadata` to describe the rdf:Class for this dataclass
+    >>> @dataclass_metadata({
+    ...     # values for owl:sameAs on the dataclass will be used
+    ...     # as the rdf:type for instances of this dataclass
+    ...     OWL.sameAs: {BLARG.MyWord},
+    ...     BLARG.meeble: {BLARG.plo},
+    ... })
+    ... @dataclasses.dataclass
+    ... class MyWord:
+    ...     word: str = dataclasses.field(metadata={
+    ...         OWL.sameAs: {BLARG.wordWord},
+    ...     })
+    ...     comment: str = dataclasses.field(metadata={
+    ...         OWL.sameAs: {RDFS.comment},
+    ...     })
+    ...
+    >>> iter_dataclass_twoples(MyWord('what', 'whomever'))
+    <generator object iter_dataclass_twoples at 0x...>
+    >>> set(_) == {
+    ...     (RDF.type, BLARG.MyWord),
+    ...     (BLARG.wordWord, 'what'),
+    ...     (RDFS.comment, 'whomever'),
+    ... }
+    True
+    >>> iter_dataclass_class_triples(MyWord)
+    <generator object iter_dataclass_class_triples at 0x...>
+    >>> set(_) == {(BLARG.MyWord, BLARG.meeble, BLARG.plo)}
+    True
+    '''
+    def _dataclass_metadata_decorator(cls):
+        assert dataclasses.is_dataclass(cls)
+        _dataclass_metadata_dict = _all_dataclass_metadata()
+        assert cls not in _dataclass_metadata_dict
+        _dataclass_metadata_dict[cls] = metadata
+        return cls
+    return _dataclass_metadata_decorator
 
-        decorate a dataclass with `dataclass_metadata` (put it before
-        `@dataclasses.dataclass` so it applies after) and pass twopledict to
-        `metadata` to describe the rdf:Class for this dataclass
-        >>> @dataclass_metadata({
-        ...     # values for owl:sameAs on the dataclass will be used
-        ...     # as the rdf:type for instances of this dataclass
-        ...     OWL.sameAs: {BLARG.MyWord},
-        ...     BLARG.meeble: {BLARG.plo},
-        ... })
-        ... @dataclasses.dataclass
-        ... class MyWord:
-        ...     word: str = dataclasses.field(metadata={
-        ...         OWL.sameAs: {BLARG.wordWord},
-        ...     })
-        ...     comment: str = dataclasses.field(metadata={
-        ...         OWL.sameAs: {RDFS.comment},
-        ...     })
-        ...
-        >>> iter_dataclass_twoples(MyWord('what', 'whomever'))
-        <generator object iter_dataclass_twoples at 0x...>
-        >>> set(_) == {
-        ...     (RDF.type, BLARG.MyWord),
-        ...     (BLARG.wordWord, 'what'),
-        ...     (RDFS.comment, 'whomever'),
-        ... }
-        True
-        >>> iter_dataclass_class_triples(MyWord)
-        <generator object iter_dataclass_class_triples at 0x...>
-        >>> set(_) == {(BLARG.MyWord, BLARG.meeble, BLARG.plo)}
-        True
-        '''
-        def _dataclass_metadata_decorator(cls):
-            assert dataclasses.is_dataclass(cls)
-            assert cls not in _DATACLASS_METADATA
-            _DATACLASS_METADATA[cls] = metadata
-            return cls
-        return _dataclass_metadata_decorator
 
-    def iter_dataclass_twoples(
-        datacls_instance,
-        iri_by_fieldname: Optional[
-            dict[str, Union[str, Iterable[str]]]
-        ] = None,
-    ) -> Iterable[RdfTwople]:
-        '''
-        >>> _blarg = BlargDataclass(foo='foo', bar='bar')
-        >>> set(iter_dataclass_twoples(_blarg)) == {(BLARG.foo, 'foo')}
-        True
-        >>> set(iter_dataclass_twoples(_blarg, {'bar': BLARG.barrr})) == {
-        ...     (BLARG.barrr, 'bar'),
-        ...     (BLARG.foo, 'foo'),
-        ... }
-        True
-        >>> set(iter_dataclass_twoples(_blarg, {
-        ...     'foo': BLARG.fool,
-        ...     'bar': BLARG.barr,
-        ...     'baz': BLARG.baz,
-        ... })) == {
-        ...     (BLARG.foo, 'foo'),
-        ...     (BLARG.fool, 'foo'),
-        ...     (BLARG.barr, 'bar'),
-        ... }
-        True
-        '''
-        assert (
-            dataclasses.is_dataclass(datacls_instance)
-            and not isinstance(datacls_instance, type)
-        )
-        _datacls_metadata = get_dataclass_metadata(datacls_instance)
-        for _type_iri in _datacls_metadata.get(OWL.sameAs, ()):
-            yield (RDF.type, _type_iri)
+def iter_dataclass_twoples(
+    datacls_instance,
+    iri_by_fieldname: Optional[
+        dict[str, Union[str, Iterable[str]]]
+    ] = None,
+) -> Iterable[RdfTwople]:
+    '''
+    >>> _blarg = BlargDataclass(foo='foo', bar='bar')
+    >>> set(iter_dataclass_twoples(_blarg)) == {(BLARG.foo, 'foo')}
+    True
+    >>> set(iter_dataclass_twoples(_blarg, {'bar': BLARG.barrr})) == {
+    ...     (BLARG.barrr, 'bar'),
+    ...     (BLARG.foo, 'foo'),
+    ... }
+    True
+    >>> set(iter_dataclass_twoples(_blarg, {
+    ...     'foo': BLARG.fool,
+    ...     'bar': BLARG.barr,
+    ...     'baz': BLARG.baz,
+    ... })) == {
+    ...     (BLARG.foo, 'foo'),
+    ...     (BLARG.fool, 'foo'),
+    ...     (BLARG.barr, 'bar'),
+    ... }
+    True
+    '''
+    assert (
+        dataclasses.is_dataclass(datacls_instance)
+        and not isinstance(datacls_instance, type)
+    )
+    _datacls_metadata = get_dataclass_metadata(datacls_instance)
+    for _type_iri in _datacls_metadata.get(OWL.sameAs, ()):
+        yield (RDF.type, _type_iri)
+    for _field in dataclasses.fields(datacls_instance):
+        _field_iris = set(_field.metadata.get(OWL.sameAs, ()))
+        if iri_by_fieldname:
+            _additional_fields = iri_by_fieldname.get(_field.name, ())
+            if isinstance(_additional_fields, str):
+                _field_iris.add(_additional_fields)
+            else:  # assume Iterable[str]
+                _field_iris.update(_additional_fields)
+        if _field_iris:
+            _field_value = getattr(datacls_instance, _field.name, None)
+            if _field_value is not None:
+                for _field_iri in _field_iris:
+                    yield (_field_iri, _field_value)
+
+
+def iter_dataclass_triples(
+    datacls_instance,
+    iri_by_fieldname: Optional[
+        dict[str, Union[str, Iterable[str]]]
+    ] = None,
+    subject_iri: Optional[str] = None,
+) -> Iterable[RdfTriple]:
+    _subj = subject_iri
+    if _subj is None:
         for _field in dataclasses.fields(datacls_instance):
-            _field_iris = set(_field.metadata.get(OWL.sameAs, ()))
-            if iri_by_fieldname:
-                _additional_fields = iri_by_fieldname.get(_field.name, ())
-                if isinstance(_additional_fields, str):
-                    _field_iris.add(_additional_fields)
-                else:  # assume Iterable[str]
-                    _field_iris.update(_additional_fields)
-            if _field_iris:
-                _field_value = getattr(datacls_instance, _field.name, None)
-                if _field_value is not None:
-                    for _field_iri in _field_iris:
-                        yield (_field_iri, _field_value)
-
-    def iter_dataclass_triples(
-        datacls_instance,
-        iri_by_fieldname: Optional[
-            dict[str, Union[str, Iterable[str]]]
-        ] = None,
-        subject_iri: Optional[str] = None,
-    ) -> Iterable[RdfTriple]:
-        _subj = subject_iri
+            if OWL.sameAs in _field.metadata.get(OWL.sameAs, ()):
+                _subj = getattr(datacls_instance, _field.name)
         if _subj is None:
-            for _field in dataclasses.fields(datacls_instance):
-                if OWL.sameAs in _field.metadata.get(OWL.sameAs, ()):
-                    _subj = getattr(datacls_instance, _field.name)
-            if _subj is None:
-                raise ValueError(
-                    'must provide `subject_iri` or define a dataclass field'
-                    'with `metadata={OWL.sameAs: {OWL.sameAs}}`'
-                )
-        _twoples = iter_dataclass_twoples(datacls_instance, iri_by_fieldname)
-        for _pred, _obj in _twoples:
-            yield (_subj, _pred, _obj)
+            raise ValueError(
+                'must provide `subject_iri` or define a dataclass field'
+                'with `metadata={OWL.sameAs: {OWL.sameAs}}`'
+            )
+    _twoples = iter_dataclass_twoples(datacls_instance, iri_by_fieldname)
+    for _pred, _obj in _twoples:
+        yield (_subj, _pred, _obj)
 
-    def iter_dataclass_class_triples(
-        datacls, *,
-        class_iri: Optional[str] = None,
-    ) -> Iterable[RdfTwople]:
-        # the dataclass itself, not an instance
-        assert dataclasses.is_dataclass(datacls) and isinstance(datacls, type)
-        _datacls_metadata = get_dataclass_metadata(datacls)
-        _class_iri = class_iri
-        if _class_iri is None:
-            try:
-                _class_iri = next(iter(_datacls_metadata[OWL.sameAs]))
-            except (KeyError, StopIteration):
-                raise ValueError(
-                    'must provide `subject_iri` or add dataclass metadata'
-                    'like `@dataclass_metadata={OWL.sameAs: {OWL.sameAs}}`'
-                )
-        for (_pred, _obj) in iter_twoples(_datacls_metadata):
-            if (_pred, _obj) != (OWL.sameAs, _class_iri):
-                yield (_class_iri, _pred, _obj)
-        for _field in dataclasses.fields(datacls):
-            _field_iri = next(iter(_datacls_metadata[OWL.sameAs]))
-            _field_iris = _field.metadata.get(OWL.sameAs, ())
-            for _field_iri in _field_iris:
-                for (_pred, _obj) in iter_twoples(_field.metadata):
-                    if (_pred, _obj) != (OWL.sameAs, _field_iri):
-                        yield (_field_iri, _pred, _obj)
 
-    def dataclass_as_twopledict(
-        dataclass_instance,
-        iri_by_fieldname=None,
-    ) -> RdfTwopleDictionary:
-        return twopledict_from_twopleset(
-            iter_dataclass_twoples(dataclass_instance, iri_by_fieldname),
-        )
+def iter_dataclass_class_triples(
+    datacls, *,
+    class_iri: Optional[str] = None,
+) -> Iterable[RdfTriple]:
+    # the dataclass itself, not an instance
+    assert dataclasses.is_dataclass(datacls) and isinstance(datacls, type)
+    _datacls_metadata = get_dataclass_metadata(datacls)
+    _class_iri = class_iri
+    if _class_iri is None:
+        try:
+            _class_iri = next(iter(_datacls_metadata[OWL.sameAs]))
+        except (KeyError, StopIteration):
+            raise ValueError(
+                'must provide `subject_iri` or add dataclass metadata'
+                'like `@dataclass_metadata={OWL.sameAs: {OWL.sameAs}}`'
+            )
+    for (_pred, _obj) in iter_twoples(_datacls_metadata):
+        if (_pred, _obj) != (OWL.sameAs, _class_iri):
+            yield (_class_iri, _pred, _obj)
+    for _field in dataclasses.fields(datacls):
+        _field_iri = next(iter(_datacls_metadata[OWL.sameAs]))
+        _field_iris = _field.metadata.get(OWL.sameAs, ())
+        for _field_iri in _field_iris:
+            for (_pred, _obj) in iter_twoples(_field.metadata):
+                if (_pred, _obj) != (OWL.sameAs, _field_iri):
+                    yield (_field_iri, _pred, _obj)
 
-    def dataclass_as_blanknode(
-        dataclass_instance,
-        iri_by_fieldname=None,
-    ) -> RdfBlanknode:
-        '''
-        >>> _blarg = BlargDataclass(foo='bloo', bar='blip')
-        >>> _blank_blarg = dataclass_as_blanknode(_blarg)
-        >>> type(_blank_blarg) is frozenset
-        True
-        >>> _blank_blarg == {(BLARG.foo, 'bloo')}
-        True
-        >>> dataclass_as_blanknode(_blarg, {'bar': BLARG.bar}) == {
-        ...     (BLARG.foo, 'bloo'),
-        ...     (BLARG.bar, 'blip'),
-        ... }
-        True
-        '''
-        return frozenset(
-            iter_dataclass_twoples(dataclass_instance, iri_by_fieldname),
-        )
+
+def dataclass_as_twopledict(
+    dataclass_instance,
+    iri_by_fieldname=None,
+) -> RdfTwopleDictionary:
+    return twopledict_from_twopleset(
+        iter_dataclass_twoples(dataclass_instance, iri_by_fieldname),
+    )
+
+
+def dataclass_as_blanknode(
+    dataclass_instance,
+    iri_by_fieldname=None,
+) -> RdfBlanknode:
+    '''
+    >>> _blarg = BlargDataclass(foo='bloo', bar='blip')
+    >>> _blank_blarg = dataclass_as_blanknode(_blarg)
+    >>> type(_blank_blarg) is frozenset
+    True
+    >>> _blank_blarg == {(BLARG.foo, 'bloo')}
+    True
+    >>> dataclass_as_blanknode(_blarg, {'bar': BLARG.bar}) == {
+    ...     (BLARG.foo, 'bloo'),
+    ...     (BLARG.bar, 'blip'),
+    ... }
+    True
+    '''
+    return frozenset(
+        iter_dataclass_twoples(dataclass_instance, iri_by_fieldname),
+    )
 
 
 ###
@@ -1589,7 +1458,8 @@ else:
 
     def turtle_from_tripledict(
         tripledict: RdfTripleDictionary, *,
-        focus=None,
+        focus: Optional[str] = None,
+        shorthand: Optional[IriShorthand] = None,  # TODO: add to turtle prefix
     ) -> str:
         _rdflib_graph = rdflib_graph_from_tripledict(tripledict)
         # TODO: sort blocks, focus first

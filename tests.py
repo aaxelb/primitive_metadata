@@ -1,15 +1,20 @@
 import doctest
 
-from primitive_rdf import (
-    iri_namespace,
+from primitive_metadata import (
+    gather,
+    primitive_rdf,
 )
 
 MODULES_WITH_DOCTESTS = (
-    iri_namespace,
+    gather,
+    primitive_rdf,
 )
 
 
 def load_tests(loader, tests, ignore):
     for _module in MODULES_WITH_DOCTESTS:
-        tests.addTests(doctest.DocTestSuite(_module))
+        tests.addTests(doctest.DocTestSuite(
+            _module,
+            optionflags=doctest.ELLIPSIS | doctest.NORMALIZE_WHITESPACE,
+        ))
     return tests
