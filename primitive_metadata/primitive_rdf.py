@@ -803,15 +803,36 @@ ShorthandPrefixMap = dict[str, Union[str, IriNamespace]]
 
 
 class IriShorthand:
+    delimiter = ':'
     __used_shorts = None  # for track_used_shorts
 
-    def __init__(
-        self,
-        prefix_map: Optional[ShorthandPrefixMap] = None,
-        delimiter=':',
-    ):
+    def __init__(self, prefix_map: Optional[ShorthandPrefixMap] = None):
         self.prefix_map = {**(prefix_map or {})}  # make a copy; handle None
-        self.delimiter = delimiter
+
+    def __repr__(self):
+        return f'{self.__class__.__qualname__}({self.prefix_map})'
+
+    def with_update(
+        self,
+        another_prefix_map: ShorthandPrefixMap,
+    ) -> 'IriShorthand':
+        '''create a new IriShorthand with the given updates
+
+        >>> _foo = IriShorthand({'foo': 'urn:foo:', 'bar': 'urn:bar:'})
+        >>> _foo.with_update({'baz': 'urn:baz'})
+        IriShorthand({'foo': 'urn:foo:', 'bar': 'urn:bar:', 'baz': 'urn:baz'})
+        >>> _foo.with_update({'bar': None, 'qux': 'urn:qux:'})
+        IriShorthand({'foo': 'urn:foo:', 'qux': 'urn:qux:'})
+        '''
+        _updated_prefix_map = {
+            **self.prefix_map,
+            **another_prefix_map,
+        }
+        return IriShorthand({
+            _label: _iri_or_namespace
+            for _label, _iri_or_namespace in _updated_prefix_map.items()
+            if _iri_or_namespace is not None
+        })
 
     @contextlib.contextmanager
     def track_used_shorts(self):
