@@ -980,13 +980,14 @@ class RdfGraph:
     def __init__(
         self,
         triples: Union[RdfTripleDictionary, Iterable[RdfTriple], None] = None,
-        *,  # keyword-only params:
-        shorthand: IriShorthand | None = None,
     ):
         if triples is None:
             self.tripledict = {}
         elif isinstance(triples, dict):
             self.tripledict = triples
+        elif isinstance(triples, types.MappingProxyType):
+            # makes a read-only RdfGraph -- this is fine
+            self.tripledict = triples  # type: ignore[assignment]
         else:  # assume Iterable[RdfTriple]
             self.tripledict = tripledict_from_tripleset(triples)
 
