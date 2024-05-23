@@ -1036,6 +1036,10 @@ class RdfGraph:
         for _pred, _obj in iter_twoples(twopledict):
             self.add((subject, _pred, _obj))
 
+    def add_tripledict(self, tripledict: RdfTripleDictionary):
+        for _triple in iter_tripleset(tripledict):
+            self.add(_triple)
+
     def __contains__(self, triple: RdfTriple) -> bool:
         (_subj, _pred, _obj) = triple
         try:
