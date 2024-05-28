@@ -29,6 +29,7 @@ RdfObject = Union[  # the object of relation may be any of:
     'RdfBlanknode',  # frozenset for blank nodes (acyclic)
     'Literal',       # namedtuple for explicit rdf literals
     'QuotedTriple',  # namedtuple for quoted rdf triples
+    'QuotedGraph',   # namedtuple for quoted rdf graph
 ]
 RdfTwople = tuple[RdfPredicate, RdfObject]
 RdfTriple = tuple[RdfSubject, RdfPredicate, RdfObject]
@@ -66,7 +67,7 @@ def add_triple(tripledict: RdfTripleDictionary, triple: RdfTriple):
 
 
 def tripledict_from_tripleset(tripleset: Iterable[RdfTriple]):
-    _tripledict = {}
+    _tripledict: RdfTripleDictionary = {}
     for _triple in tripleset:
         add_triple(_tripledict, _triple)
     return _tripledict
@@ -171,7 +172,7 @@ def twopledict_from_twopleset(
     >>> _tdict[RDFS.range] == {RDF.Resource, RDFS.Literal}
     True
     '''
-    _twopledict = {}
+    _twopledict: RdfTwopleDictionary = {}
     for _pred, _obj in twopleset:
         if _pred in _twopledict:
             _objectset = _twopledict[_pred]
@@ -179,6 +180,39 @@ def twopledict_from_twopleset(
             _objectset = _twopledict[_pred] = set()
         _objectset.add(_obj)
     return _twopledict
+
+
+def smells_like_iri(something) -> bool:
+    return isinstance(something, str)  # TODO: iri parsing?!
+
+
+def smells_like_rdf_object(something) -> bool:
+    return (
+        isinstance(something, (
+            int,
+            float,
+            datetime.date,
+            Literal,
+            QuotedTriple,
+            QuotedGraph,
+        ))
+        or smells_like_iri(something)
+        or smells_like_blanknode(something)
+    )
+
+
+def smells_like_blanknode(something) -> bool:
+    return isinstance(something, frozenset) and all(
+        smells_like_twople(_item) for _item in something
+    )
+
+
+def smells_like_twople(something) -> bool:
+    try:
+        _pred, _obj = something
+    except ValueError:
+        return False
+    return isinstance(_pred, str) and smells_like_rdf_object(_obj)
 
 
 def smells_like_rdf_tripledict(rdf_dictionary) -> bool:
@@ -1100,6 +1134,14 @@ class RdfGraph:
                     )
 
 
+class QuotedGraph(RdfGraph):
+    focus_iri: str
+
+    def __init__(self, *args, focus_iri: str, **kwargs):
+        self.focus_iri = focus_iri
+        super().__init__(*args, **kwargs)
+
+
 def tidy_pathset(messy_pathset: MessyPathset) -> TidyPathset:
     if not messy_pathset:
         return {}
@@ -1118,7 +1160,7 @@ def tidy_pathset(messy_pathset: MessyPathset) -> TidyPathset:
                 _next_pathset,
                 into=into.setdefault(_pred, {}),
             )
-    _pathset = {}
+    _pathset: TidyPathset = {}
     for _parallel_pathset in messy_pathset:
         _merge_pathset(
             tidy_pathset(_parallel_pathset),
