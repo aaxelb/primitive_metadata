@@ -306,8 +306,8 @@ def iter_tripleset(
 
 
 def choose_one_iri(iris: Iterable[str]):
-    # choose shortest by length; break ties by alphabet
-    return min(iris, key=lambda iri: (len(iri), iri))
+    # prefer iris without ":", shorter iris, and break ties by alphabet
+    return min(iris, key=lambda iri: (':' in iri, len(iri), iri))
 
 
 class Literal(NamedTuple):
