@@ -1703,9 +1703,6 @@ else:
                         str(rdflib_obj),
                         language=rdflib_obj.language,
                     )
-                _as_python = rdflib_obj.toPython()
-                if isinstance(_as_python, (int, float, datetime.date)):
-                    return _as_python
                 if rdflib_obj.datatype:
                     return literal(
                         str(rdflib_obj),
