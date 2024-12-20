@@ -120,7 +120,6 @@ TripleGatherer = Callable[
 class GatheringNorms:
     namestory: rdf.Namestory
     focustype_iris: frozenset[str]
-    param_iris: frozenset[str]
     thesaurus: rdf.RdfTripleDictionary
 
     @classmethod
@@ -128,7 +127,6 @@ class GatheringNorms:
         cls,
         namestory: rdf.Namestory,
         focustype_iris: Iterable[str],
-        param_iris: Iterable[str] = (),
         thesaurus: Optional[rdf.RdfTripleDictionary] = None,
     ) -> GatheringNorms:
         '''more flexible alternate constructor for GatheringNorms
@@ -136,20 +134,8 @@ class GatheringNorms:
         return cls(
             namestory,
             focustype_iris=rdf.ensure_frozenset(focustype_iris),
-            param_iris=rdf.ensure_frozenset(param_iris),
             thesaurus=(thesaurus or {}),
         )
-
-    def validate_param_iris(self, param_iris: Iterable[str]):
-        _all_iris_are_known = self.param_iris.issuperset(param_iris)
-        if not _all_iris_are_known:
-            raise GatherException(
-                label='invalid-param-iris',
-                comment=(
-                    f'expected any of {set(self.param_iris)},'
-                    f' got {set(param_iris)}'
-                )
-            )
 
 
 @dataclasses.dataclass
@@ -163,9 +149,6 @@ class GatheringOrganizer:
     signup: _GathererSignup = dataclasses.field(
         default_factory=lambda: _GathererSignup(),
     )
-
-    def __post_init__(self):
-        self.norms.validate_param_iris(self.gatherer_params.values())
 
     def new_gathering(self, gatherer_kwargs: dict | None = None) -> Gathering:
         return Gathering(
@@ -558,7 +541,6 @@ if __debug__:
             BLARG.SomeType,
             BLARG.AnotherType,
         },
-        param_iris={BLARG.hello},
     )
 
     BlorgArganizer = GatheringOrganizer(
