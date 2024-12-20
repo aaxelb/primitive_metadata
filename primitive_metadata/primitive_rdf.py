@@ -3,6 +3,7 @@
 uses rdf concepts: https://www.w3.org/TR/rdf11-concepts/
 '''
 # only standard imports (python 3.? (TODO: specificity informed by testing))
+import collections.abc
 import contextlib
 import dataclasses  # python3.7+
 import datetime
@@ -11,7 +12,7 @@ import json
 import logging
 import operator
 import types
-from typing import Iterable, Union, Optional, NamedTuple, Callable
+from typing import Iterable, Iterator, Union, Optional, NamedTuple, Callable
 import weakref
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,10 @@ RdfTripleSet = frozenset[RdfTriple]
 RdfTwopleDictionary = dict[RdfPredicate, set[RdfObject]]
 RdfTripleDictionary = dict[RdfSubject, RdfTwopleDictionary]
 
+ReadonlyTwopleDictionary = collections.abc.Mapping[
+    RdfPredicate,
+    collections.abc.Collection[RdfObject],
+]
 
 # for defining branching paths of predicates from a focus
 TidyPathset = dict[RdfPredicate, 'TidyPathset']
@@ -132,7 +137,7 @@ def blanknode(
     return frozenset()
 
 
-def iter_twoples(twopledict: RdfTwopleDictionary) -> Iterable[RdfTwople]:
+def iter_twoples(twopledict: ReadonlyTwopleDictionary) -> Iterator[RdfTwople]:
     '''iterate thru twoples in the given twopledict
 
     >>> iter_twoples({})
@@ -264,14 +269,14 @@ def smells_like_rdf_tripledict(rdf_dictionary) -> bool:
                 return False
             if not _objectset or not isinstance(_objectset, set):
                 return False
-            if not all(isinstance(_obj, RdfObject) for _obj in _objectset):
+            if not all(smells_like_rdf_object(_obj) for _obj in _objectset):
                 return False
     return True
 
 
 def iter_tripleset(
     tripledict: RdfTripleDictionary
-) -> Iterable[RdfTriple]:
+) -> Iterator[RdfTriple]:
     '''yields all triples from the tripledict
 
     >>> iter_tripleset({})
@@ -327,7 +332,7 @@ class Literal(NamedTuple):
         except StopIteration:
             return None
 
-    def iter_language_tags(self) -> Iterable[str]:
+    def iter_language_tags(self) -> Iterator[str]:
         yield from (
             iri_minus_namespace(_iri, namespace=IANA_LANGUAGE)
             for _iri in self.datatype_iris
@@ -414,7 +419,7 @@ def literal(
     if _str_value is None:
         raise ValueError(f'expected RdfObject, got {primitive_value}')
 
-    def _iter_one_or_many(items) -> Iterable:
+    def _iter_one_or_many(items) -> Iterator:
         if isinstance(items, str):
             yield items
         else:
@@ -424,7 +429,7 @@ def literal(
             except TypeError:
                 pass  # not str or iterable; ignore
 
-    def _iter_datatype_iris() -> Iterable[str]:
+    def _iter_datatype_iris() -> Iterator[str]:
         yield from _iter_one_or_many(datatype_iris)
         for _language in _iter_one_or_many(language):
             if ':' in _language:  # assume full IRI
@@ -508,6 +513,8 @@ def is_container(bnode: RdfBlanknode) -> bool:
     True
     >>> is_container(blanknode({RDF.type: {RDF.Container}}))
     True
+
+    not linked lists tho
     >>> is_container(blanknode({RDF.type: {RDF.List}}))
     False
     >>> is_container(blanknode())
@@ -535,7 +542,7 @@ def sequence(
     return container(RDF.Seq, items, with_twoples=with_twoples)
 
 
-def sequence_objects_in_order(seq: RdfBlanknode) -> Iterable[RdfObject]:
+def sequence_objects_in_order(seq: RdfBlanknode) -> Iterator[RdfObject]:
     '''
     >>> _seq = sequence([5,4,3,2,1])
     >>> list(sequence_objects_in_order(_seq))
@@ -548,19 +555,24 @@ def sequence_objects_in_order(seq: RdfBlanknode) -> Iterable[RdfObject]:
     )
 
 
-def container_objects(bnode: RdfBlanknode) -> Iterable[RdfObject]:
+def container_objects(bnode: RdfBlanknode) -> Iterator[RdfObject]:
     '''
     >>> _seq = sequence([5,4,3,2,1])
     >>> set(container_objects(_seq)) == {1,2,3,4,5}
     True
+    >>> list(container_objects(_seq)) == [5,4,3,2,1]
+    True
     '''
-    for _, _obj in _enumerate_container(bnode):
-        yield _obj
+    if (RDF.type, RDF.Seq) in bnode:
+        yield from sequence_objects_in_order(bnode)
+    else:
+        for _, _obj in _enumerate_container(bnode):
+            yield _obj
 
 
 def _enumerate_container(
     bnode: RdfBlanknode,
-) -> Iterable[tuple[int, RdfObject]]:
+) -> Iterator[tuple[int, RdfObject]]:
     _INDEX_NAMESPACE = IriNamespace(RDF['_'])  # rdf:_1, rdf:_2, ...
     for _pred, _obj in bnode:
         try:
@@ -1081,7 +1093,7 @@ class RdfGraph:
         except KeyError:
             return False
 
-    def q(self, subj: str, pathset: MessyPathset) -> Iterable[RdfObject]:
+    def q(self, subj: str, pathset: MessyPathset) -> Iterator[RdfObject]:
         '''query the wrapped tripledict, iterate over matching objects
 
         >>> _tw = RdfGraph({
@@ -1115,7 +1127,7 @@ class RdfGraph:
         self,
         twopledict: RdfTwopleDictionary,
         tidy_pathset: TidyPathset,
-    ) -> Iterable[RdfObject]:
+    ) -> Iterator[RdfObject]:
         for _pred, _next_pathset in tidy_pathset.items():
             _object_set = twopledict.get(_pred) or set()
             if not _next_pathset:  # end of path
@@ -1203,7 +1215,7 @@ def twopledict_as_nocontext_jsonld(
         for _predicate_iri, _objset in twopledict.items()
     }
     if iri:
-        _jsonld_twopledict['@id'] = iri
+        _jsonld_twopledict['@id'] = iri  # type: ignore[assignment]
     return _jsonld_twopledict
 
 
@@ -1389,7 +1401,7 @@ def iter_dataclass_twoples(
     iri_by_fieldname: Optional[
         dict[str, Union[str, Iterable[str]]]
     ] = None,
-) -> Iterable[RdfTwople]:
+) -> Iterator[RdfTwople]:
     '''
     >>> _blarg = BlargDataclass(foo='foo', bar='bar')
     >>> set(iter_dataclass_twoples(_blarg)) == {(BLARG.foo, 'foo')}
@@ -1438,7 +1450,7 @@ def iter_dataclass_triples(
         dict[str, Union[str, Iterable[str]]]
     ] = None,
     subject_iri: Optional[str] = None,
-) -> Iterable[RdfTriple]:
+) -> Iterator[RdfTriple]:
     _subj = subject_iri
     if _subj is None:
         for _field in dataclasses.fields(datacls_instance):
@@ -1457,7 +1469,7 @@ def iter_dataclass_triples(
 def iter_dataclass_class_triples(
     datacls, *,
     class_iri: Optional[str] = None,
-) -> Iterable[RdfTriple]:
+) -> Iterator[RdfTriple]:
     # the dataclass itself, not an instance
     assert dataclasses.is_dataclass(datacls) and isinstance(datacls, type)
     _datacls_metadata = get_dataclass_metadata(datacls)
@@ -1600,7 +1612,7 @@ else:
         '''
 
         _rdflib_graph = rdflib.Graph()  # TODO: namespace prefixes?
-        _blanknode_map = {}
+        _blanknode_map: dict[RdfBlanknode, rdflib.BNode] = {}
 
         # a local helper
         def _add_to_rdflib_graph(
@@ -1672,7 +1684,7 @@ else:
     def tripledict_from_rdflib(rdflib_graph):
         _open_subjects = set()
 
-        def _twoples(rdflib_subj) -> Iterable[RdfTwople]:
+        def _twoples(rdflib_subj) -> Iterator[RdfTwople]:
             if rdflib_subj in _open_subjects:
                 raise ValueError(
                     'cannot handle loopy blanknodes'
