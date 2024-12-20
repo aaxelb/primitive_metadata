@@ -30,6 +30,7 @@ __all__ = (
     'GatheringNorms',
     'GatheringOrganizer',
     'Gathering',
+    'GatherCache',
 )
 
 if __debug__:  # tests under __debug__ thru-out
@@ -212,8 +213,8 @@ class Gathering:
     norms: GatheringNorms
     organizer: GatheringOrganizer
     gatherer_kwargs: dict
-    cache: _GatherCache = dataclasses.field(
-        default_factory=lambda: _GatherCache(),
+    cache: GatherCache = dataclasses.field(
+        default_factory=lambda: GatherCache(),
     )
 
     def ask(
@@ -362,15 +363,17 @@ class Gathering:
         }
 
 
-class _GatherCache:
-    gathers_done: set[tuple[Gatherer, Focus]]
-    focus_set: set[Focus]
-    gathered: rdf.RdfGraph
-
-    def __init__(self):
-        self.gathers_done = set()
-        self.focus_set = set()
-        self.gathered = rdf.RdfGraph()
+@dataclasses.dataclass
+class GatherCache:
+    gathers_done: set[tuple[Gatherer, Focus]] = dataclasses.field(
+        default_factory=set,
+    )
+    focus_set: set[Focus] = dataclasses.field(
+        default_factory=set,
+    )
+    gathered: rdf.RdfGraph = dataclasses.field(
+        default_factory=rdf.RdfGraph,
+    )
 
     def add_focus(self, focus: Focus):
         if focus not in self.focus_set:
