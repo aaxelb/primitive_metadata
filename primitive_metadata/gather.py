@@ -44,7 +44,7 @@ class Focus:
     gatherer_kwargset: frozenset[tuple[str, Any]]
 
     @classmethod
-    def new(cls, iris=None, type_iris=None, gatherer_kwargset=None):
+    def new(cls, iris=None, type_iris=None, gatherer_kwargset=None, **kwargs):
         '''convenience wrapper for Focus
         '''
         if isinstance(gatherer_kwargset, frozenset):
@@ -68,6 +68,7 @@ class Focus:
             iris=rdf.ensure_frozenset(iris),
             type_iris=rdf.ensure_frozenset(type_iris),
             gatherer_kwargset=_gatherer_kwargset,
+            **kwargs,
         )
 
     def single_iri(self) -> str:
@@ -130,6 +131,7 @@ class GatheringNorms:
         focustype_iris: Iterable[str],
         param_iris: Iterable[str] = (),
         thesaurus: Optional[rdf.RdfTripleDictionary] = None,
+        **kwargs,
     ) -> GatheringNorms:
         '''more flexible alternate constructor for GatheringNorms
         '''
@@ -138,6 +140,7 @@ class GatheringNorms:
             focustype_iris=rdf.ensure_frozenset(focustype_iris),
             param_iris=rdf.ensure_frozenset(param_iris),
             thesaurus=(thesaurus or {}),
+            **kwargs,
         )
 
     def validate_param_iris(self, param_iris: Iterable[str]):
