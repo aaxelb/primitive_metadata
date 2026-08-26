@@ -1643,7 +1643,8 @@ else:
                             namespace=IANA_LANGUAGE,
                         ),
                     )
-                elif obj.datatype_iris:  # non-standard language (or datatype)
+                elif obj.datatype_iris and obj.datatype_iris != {RDF.string}:
+                    # has meaningful datatype (or non-standard language)
                     return rdflib.Literal(
                         obj.unicode_value,
                         datatype=rdflib.URIRef(
